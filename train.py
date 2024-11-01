@@ -89,7 +89,7 @@ class LightningModule(L.LightningModule):
         def training_step(self, batch, batch_idx):
             historical_features = concatenate_historical_features(batch)
             predicted_positions = self.model(historical_features, batch["history_availabilities"])
-            
+
             # Crop the future positions to match the number of timesteps
             future_positions = batch["target_positions"][:, :, :self.n_timesteps]
             future_availabilities = batch["target_availabilities"][:, :, :self.n_timesteps]
@@ -119,17 +119,18 @@ def main(data_dir, fast_dev_run):
     
     train_loader = DataLoader(
             dataset,
-            batch_size=256,
-            num_workers=16,
+            batch_size=512,
+            num_workers=8,
+            shuffle=True,
             persistent_workers=True,
-            pin_memory=True,
+            pin_memory=False,
             drop_last=True,
-            prefetch_factor=4,
+            prefetch_factor=8,
             collate_fn=collate_waymo,
         )
 
     module = LightningModule()
-    trainer = L.Trainer(max_epochs=1, profiler="simple", accelerator="gpu", devices=1, fast_dev_run=fast_dev_run)
+    trainer = L.Trainer(max_epochs=100, accelerator="gpu", devices=1, fast_dev_run=fast_dev_run)
     trainer.fit(model=module, train_dataloaders=train_loader)
    
 

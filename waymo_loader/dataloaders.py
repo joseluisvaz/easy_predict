@@ -15,7 +15,7 @@ from common_utils.geometry import (
     get_yaw_from_se2
 )
 from common_utils.tensor_utils import force_pad_batch_size
-from waymo_loader.feature_description import get_feature_description 
+from waymo_loader.feature_description import get_feature_description, STATE_FEATURES
 
 # Define generic type for arrays so that we can inspect when our features
 # have numpy arrays or torch tensors
@@ -192,7 +192,7 @@ class WaymoDatasetHelper(object):
 
 def _generate_features(decoded_example: Dict[str, np.ndarray], future_num_frames=80, max_n_agents=8) -> Dict[str, np.ndarray]:
     # If a sample was not seen at all in the past, we declare the sample as invalid.
-    tracks_to_predict = (decoded_example["state/tracks_to_predict"] > 0).astype(np.bool_)
+    tracks_to_predict = (decoded_example["state/tracks_to_predict"].squeeze() > 0).astype(np.bool_)
 
     multi_agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
     multi_agent_features.crop_to_desired_prediction_horizon(future_num_frames)
@@ -210,23 +210,37 @@ def _generate_features(decoded_example: Dict[str, np.ndarray], future_num_frames
     return multi_agent_features.__dict__
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
-    features = [_generate_features(payload) for payload in payloads]
     # Collate the normal features like normal tensors, and convert it to pytorch
-    batch = default_collate(features)
+    batch = default_collate(payloads)
     torch_batch = default_convert(batch)
     return torch_batch
+
+def parse_concatenated_tensor(concatenated_tensor: np.ndarray):
+
+    agent_length, _ = concatenated_tensor.shape
+
+    parsed_features = {}
+    start_idx = 0
+    for feature_name, feature_descriptor in STATE_FEATURES.items():
+        shape = feature_descriptor.shape
+        feature_length = shape[1] if len(shape) > 1 else 1
+        
+        end_idx = start_idx + feature_length
+        parsed_features[feature_name] = concatenated_tensor[:, start_idx:end_idx].reshape(agent_length, feature_length)
+        start_idx = end_idx
+
+    return parsed_features
 
 class WaymoH5Dataset(Dataset):
     def __init__(self, filepath: str):
         """Do not open the h5 file here"""
         self.dataset: Optional[h5py.File] = None
-        self.feature_description = get_feature_description()
+        self.feature_description = STATE_FEATURES
         self.filepath = filepath
 
         # Open and close dataset just to extract the length
         with h5py.File(self.filepath, "r", libver='latest', swmr=True) as file:
-            example_feature_name = list(self.feature_description.keys())[0]
-            self.dataset_len = len(file[example_feature_name])
+            self.dataset_len = len(file["merged_features"])
 
     def __len__(self) -> int:
         return self.dataset_len
@@ -235,11 +249,15 @@ class WaymoH5Dataset(Dataset):
         # NOTE: We open the dataset here so that each worker has its own file handle
         if self.dataset is None:
             self.dataset = h5py.File(self.filepath, "r", libver='latest', swmr=True)
-        return {k: np.array(self.dataset[k][idx]) for k in self.feature_description.keys()}
+    
+        merged_features = np.array(self.dataset["merged_features"][idx])
+        data_fetched = parse_concatenated_tensor(merged_features)
+        
+        features = _generate_features(data_fetched) 
+        return features
 
     def __del__(self):
         if self.dataset is not None:
             self.dataset.close()
-    
 
     
