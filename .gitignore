@@ -1,0 +1,8 @@
+# Ignore data folder
+data/
+
+# Ignore trajdata folder
+trajdata/
+
+# Ignore __pycache__ directories
+__pycache__/
