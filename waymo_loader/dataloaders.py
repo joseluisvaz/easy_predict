@@ -5,14 +5,14 @@ import h5py
 import numpy as np
 import torch
 from torch import Tensor
-from torch.utils.data import Dataset 
+from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
 
 from common_utils.geometry import (
-    transform_points, 
-    get_transformation_matrix, 
-    get_so2_from_se2, 
-    get_yaw_from_se2
+    transform_points,
+    get_transformation_matrix,
+    get_so2_from_se2,
+    get_yaw_from_se2,
 )
 from common_utils.tensor_utils import force_pad_batch_size
 from waymo_loader.feature_description import get_feature_description, STATE_FEATURES
@@ -20,6 +20,7 @@ from waymo_loader.feature_description import get_feature_description, STATE_FEAT
 # Define generic type for arrays so that we can inspect when our features
 # have numpy arrays or torch tensors
 Array = TypeVar("Array", np.ndarray, Tensor)
+
 
 @dataclass
 class MultiAgentFeatures(Generic[Array]):
@@ -42,6 +43,7 @@ class MultiAgentFeatures(Generic[Array]):
 
     extent: Array  # Extent of the object (bounding box)
     actor_type: Array
+    is_sdc: Array
 
     def filter_with_mask(self, mask: Array) -> None:
         self.history_velocities = self.history_velocities[mask]
@@ -59,12 +61,15 @@ class MultiAgentFeatures(Generic[Array]):
         self.speed = self.speed[mask]
         self.extent = self.extent[mask]
         self.actor_type = self.actor_type[mask]
+        self.is_sdc = self.is_sdc[mask]
 
     def force_pad_batch_size(self, max_n_agents: int) -> None:
         self.history_velocities = force_pad_batch_size(self.history_velocities, max_n_agents)
         self.history_positions = force_pad_batch_size(self.history_positions, max_n_agents)
         self.history_yaws = force_pad_batch_size(self.history_yaws, max_n_agents)
-        self.history_availabilities = force_pad_batch_size(self.history_availabilities, max_n_agents)
+        self.history_availabilities = force_pad_batch_size(
+            self.history_availabilities, max_n_agents
+        )
 
         self.target_velocities = force_pad_batch_size(self.target_velocities, max_n_agents)
         self.target_positions = force_pad_batch_size(self.target_positions, max_n_agents)
@@ -76,6 +81,7 @@ class MultiAgentFeatures(Generic[Array]):
         self.speed = force_pad_batch_size(self.speed, max_n_agents)
         self.extent = force_pad_batch_size(self.extent, max_n_agents)
         self.actor_type = force_pad_batch_size(self.actor_type, max_n_agents)
+        self.is_sdc = force_pad_batch_size(self.is_sdc, max_n_agents)
 
     def transform_with_se3(self, transform: Array) -> None:
         rotation = get_so2_from_se2(transform)  # type: ignore
@@ -83,10 +89,18 @@ class MultiAgentFeatures(Generic[Array]):
         h_avails = self.history_availabilities
         t_avails = self.target_availabilities
 
-        self.history_positions[h_avails] = transform_points(self.history_positions[h_avails], transform)
-        self.target_positions[t_avails] = transform_points(self.target_positions[t_avails], transform)
-        self.target_velocities[t_avails] = transform_points(self.target_velocities[t_avails], rotation)
-        self.history_velocities[h_avails] = transform_points(self.history_velocities[h_avails], rotation)
+        self.history_positions[h_avails] = transform_points(
+            self.history_positions[h_avails], transform
+        )
+        self.target_positions[t_avails] = transform_points(
+            self.target_positions[t_avails], transform
+        )
+        self.target_velocities[t_avails] = transform_points(
+            self.target_velocities[t_avails], rotation
+        )
+        self.history_velocities[h_avails] = transform_points(
+            self.history_velocities[h_avails], rotation
+        )
 
         # Adjust yaws accordingly
         relative_yaw = get_yaw_from_se2(transform)  # type: ignore
@@ -110,7 +124,6 @@ class MultiAgentFeatures(Generic[Array]):
         self.target_availabilities = self.target_availabilities[:, :desired_length]
 
 
-
 DatasetOutputDicts = Dict[str, Array]
 
 
@@ -127,7 +140,9 @@ class WaymoDatasetHelper(object):
         )
 
     @staticmethod
-    def generate_multi_agent_features(decoded_example: Dict[str, np.ndarray]) -> MultiAgentFeatures[np.ndarray]:
+    def generate_multi_agent_features(
+        decoded_example: Dict[str, np.ndarray]
+    ) -> MultiAgentFeatures[np.ndarray]:
         past_states = np.stack(
             [
                 decoded_example["state/past/x"],
@@ -166,16 +181,15 @@ class WaymoDatasetHelper(object):
 
         history_states = np.concatenate([past_states, cur_states], axis=1)
         history_availabilities = np.concatenate(
-            [decoded_example["state/past/valid"] > 0, decoded_example["state/current/valid"] > 0], axis=1
+            [decoded_example["state/past/valid"] > 0, decoded_example["state/current/valid"] > 0],
+            axis=1,
         ).astype(np.bool_)
         future_availabilities = decoded_example["state/future/valid"] > 0
 
         # By convention velocities have one element less
         return MultiAgentFeatures(
             history_positions=history_states[..., :2].astype(np.float32),
-            history_velocities=history_states[..., 3:5].astype(
-                np.float32
-            ),  
+            history_velocities=history_states[..., 3:5].astype(np.float32),
             history_yaws=history_states[..., 2, None].astype(np.float32),
             history_availabilities=history_availabilities.astype(np.bool_),
             target_positions=future_states[..., :2].astype(np.float32),
@@ -187,33 +201,44 @@ class WaymoDatasetHelper(object):
             speed=cur_states[..., 5, None].astype(np.float32),
             extent=WaymoDatasetHelper.get_extent(decoded_example).astype(np.float32),
             actor_type=decoded_example["state/type"].astype(np.intp),
+            is_sdc=decoded_example["state/is_sdc"].astype(np.bool_),
         )
 
 
-def _generate_features(decoded_example: Dict[str, np.ndarray], future_num_frames=80, max_n_agents=8) -> Dict[str, np.ndarray]:
+def _generate_features(
+    decoded_example: Dict[str, np.ndarray], future_num_frames=80, max_n_agents=8
+) -> Dict[str, np.ndarray]:
     # If a sample was not seen at all in the past, we declare the sample as invalid.
     tracks_to_predict = (decoded_example["state/tracks_to_predict"].squeeze() > 0).astype(np.bool_)
 
     multi_agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
     multi_agent_features.crop_to_desired_prediction_horizon(future_num_frames)
 
+    # # Get the index of the self driving car to transform to an ego-centric scene
+    # self_driving_car_index = multi_agent_features.is_sdc.squeeze()
+
     # Now remove the unwanted agents by filtering with tracks to predict
     multi_agent_features.filter_with_mask(tracks_to_predict)
 
+    # From the surviving agents choose the firs one's centroid and yaw to center the scene
+    to_sdc_se3 = get_transformation_matrix(
+        multi_agent_features.centroid[0],
+        multi_agent_features.yaw[0],
+    )
+    multi_agent_features.transform_with_se3(to_sdc_se3)
+
     # Now pad the remaining agents to the max number of agents, needed to have tensors the same size
     multi_agent_features.force_pad_batch_size(max_n_agents)
-        
-    # From the surviving agents choose the firs one's centroid and yaw to center the scene
-    to_first_agent_se3 = get_transformation_matrix(multi_agent_features.centroid[0], multi_agent_features.yaw[0])
-    multi_agent_features.transform_with_se3(to_first_agent_se3)
-    
+
     return multi_agent_features.__dict__
+
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
     # Collate the normal features like normal tensors, and convert it to pytorch
     batch = default_collate(payloads)
     torch_batch = default_convert(batch)
     return torch_batch
+
 
 def parse_concatenated_tensor(concatenated_tensor: np.ndarray):
 
@@ -224,12 +249,15 @@ def parse_concatenated_tensor(concatenated_tensor: np.ndarray):
     for feature_name, feature_descriptor in STATE_FEATURES.items():
         shape = feature_descriptor.shape
         feature_length = shape[1] if len(shape) > 1 else 1
-        
+
         end_idx = start_idx + feature_length
-        parsed_features[feature_name] = concatenated_tensor[:, start_idx:end_idx].reshape(agent_length, feature_length)
+        parsed_features[feature_name] = concatenated_tensor[:, start_idx:end_idx].reshape(
+            agent_length, feature_length
+        )
         start_idx = end_idx
 
     return parsed_features
+
 
 class WaymoH5Dataset(Dataset):
     def __init__(self, filepath: str):
@@ -239,7 +267,7 @@ class WaymoH5Dataset(Dataset):
         self.filepath = filepath
 
         # Open and close dataset just to extract the length
-        with h5py.File(self.filepath, "r", libver='latest', swmr=True) as file:
+        with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
             self.dataset_len = len(file["merged_features"])
 
     def __len__(self) -> int:
@@ -248,16 +276,14 @@ class WaymoH5Dataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, np.ndarray]:
         # NOTE: We open the dataset here so that each worker has its own file handle
         if self.dataset is None:
-            self.dataset = h5py.File(self.filepath, "r", libver='latest', swmr=True)
-    
+            self.dataset = h5py.File(self.filepath, "r", libver="latest", swmr=True)
+
         merged_features = np.array(self.dataset["merged_features"][idx])
         data_fetched = parse_concatenated_tensor(merged_features)
-        
-        features = _generate_features(data_fetched) 
+
+        features = _generate_features(data_fetched)
         return features
 
     def __del__(self):
         if self.dataset is not None:
             self.dataset.close()
-
-    

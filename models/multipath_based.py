@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 from models.multi_context_gating import MultiContextGating
 from models.rnn_cells import MultiAgentLSTMCell
