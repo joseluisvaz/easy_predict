@@ -1,8 +1,11 @@
+import io
 from argparse import ArgumentParser, Namespace
 
+from PIL import Image
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader 
+import matplotlib.pyplot as plt
 from clearml import Task
 import lightning as L
 
@@ -79,6 +82,74 @@ def compute_loss(predicted_positions, target_positions, target_availabilities):
     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
     return torch.mean(errors * target_availabilities)
 
+task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction") 
+
+class OnTrainCallback(L.Callback):
+    def on_train_epoch_end(self, trainer, pl_module):
+        # do something with all training_step outputs, for example:
+        batch = next(iter(trainer.val_dataloaders))
+
+        single_sample = {k: v[0] for k, v in batch.items()}
+        
+        self.log_plot_to_clearml(pl_module, task.get_logger(), single_sample, trainer.current_epoch)
+        
+    def log_plot_to_clearml(self, pl_module, logger, single_sample, current_epoch):
+        
+        with torch.no_grad():
+            historical_features = concatenate_historical_features(single_sample).unsqueeze(0).to(pl_module.device)
+            predicted_positions = pl_module.model(historical_features, single_sample["history_availabilities"].unsqueeze(0).to(pl_module.device))
+            predicted_positions = predicted_positions[0].cpu().numpy()
+
+        history_positions = single_sample["history_positions"].cpu().numpy()
+        target_positions = single_sample["target_positions"].cpu().numpy()
+        history_availabilities = single_sample["history_availabilities"].cpu().numpy()
+        target_availabilities = single_sample["target_availabilities"].cpu().numpy()
+            
+        n_agents = history_positions.shape[0]
+        
+        past_sequences = []
+        ground_truth_sequences = []
+        predicted_sequences = []
+        for agent_idx in range(n_agents):
+            if history_availabilities[agent_idx, -1] == 0:
+                # Agent is not available in the current timestep
+                continue
+
+            history_sequence = history_positions[agent_idx, history_availabilities[agent_idx], :2]
+            
+            ground_truth_sequence = target_positions[agent_idx, target_availabilities[agent_idx], :2]
+            # Use the entire prediction horizon
+            predicted_sequence = predicted_positions[agent_idx, :, :2]
+
+            past_sequences.append(history_sequence)
+            ground_truth_sequences.append(ground_truth_sequence)
+            predicted_sequences.append(predicted_sequence)
+
+        plt.figure()
+        for sequence in past_sequences:
+            plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="gray")
+        for sequence in ground_truth_sequences:
+            plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="green")        
+        for sequence in predicted_sequences:
+            plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="red")        
+
+        plt.title("predictions")
+        plt.xlabel('x')
+        plt.ylabel('y')
+        plt.grid(True)
+
+        # Save the plot to an in-memory buffer
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        plt.close()
+        buf.seek(0)
+
+        # Convert the buffer to a PIL Image
+        image = Image.open(buf)
+        if image.mode == 'RGBA':
+            image = image.convert('RGB')
+        logger.report_image(title="sample", series="plot", iteration=current_epoch, image=image)
+
 
 class LightningModule(L.LightningModule):
         def __init__(self):
@@ -107,12 +178,12 @@ class LightningModule(L.LightningModule):
             future_availabilities = batch["target_availabilities"][:, :, :self.n_timesteps]
             loss = compute_loss(predicted_positions, future_positions, future_availabilities)
             self.log("loss/val", loss)
+            return loss
 
         def configure_optimizers(self):
             optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
             return optimizer
 
-task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction") 
 
 def main(data_dir, fast_dev_run):
     dataset = WaymoH5Dataset(data_dir)
@@ -128,10 +199,22 @@ def main(data_dir, fast_dev_run):
             prefetch_factor=8,
             collate_fn=collate_waymo,
         )
+        
+    val_loader = DataLoader(
+            dataset,
+            batch_size=512,
+            num_workers=8,
+            shuffle=False,
+            persistent_workers=True,
+            pin_memory=False,
+            drop_last=True,
+            prefetch_factor=8,
+            collate_fn=collate_waymo,
+        )
 
     module = LightningModule()
-    trainer = L.Trainer(max_epochs=100, accelerator="gpu", devices=1, fast_dev_run=fast_dev_run)
-    trainer.fit(model=module, train_dataloaders=train_loader)
+    trainer = L.Trainer(max_epochs=30, accelerator="gpu", devices=1, fast_dev_run=fast_dev_run, callbacks=OnTrainCallback())
+    trainer.fit(model=module, train_dataloaders=train_loader, val_dataloaders=val_loader)
    
 
 def _parse_arguments() -> Namespace:
