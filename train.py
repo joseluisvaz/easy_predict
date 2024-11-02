@@ -4,6 +4,7 @@ from argparse import ArgumentParser, Namespace
 from PIL import Image
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import DataLoader 
 import matplotlib.pyplot as plt
 from clearml import Task
@@ -14,12 +15,18 @@ from models.rnn_cells import MultiAgentLSTMCell
 
 torch.set_float32_matmul_precision('medium')
 
+NUM_CLASSES = 5
+
 def concatenate_historical_features(batch):
+    n_batch, n_agents, n_past, _ = batch["history_positions"].shape
+    types = batch["actor_type"].view(n_batch, n_agents, 1)
+    types_one_hot = F.one_hot(types.expand(-1, -1, n_past), num_classes=NUM_CLASSES).float()
     return torch.cat(
         [ 
             batch["history_positions"],
             batch["history_velocities"],
             batch["history_yaws"],
+            types_one_hot,
         ], axis=-1   
     )
 
@@ -90,22 +97,25 @@ class OnTrainCallback(L.Callback):
     def on_train_epoch_end(self, trainer, pl_module):
         # do something with all training_step outputs, for example:
         batch = next(iter(trainer.val_dataloaders))
-
-        single_sample = {k: v[0] for k, v in batch.items()}
         
-        self.log_plot_to_clearml(pl_module, task.get_logger(), single_sample, trainer.current_epoch)
+        SAMPLE_IMAGES = 5
+        n_batch = batch["history_positions"].shape[0];
+        for idx in range(0, min(SAMPLE_IMAGES, n_batch)):
+            # Just extract a single sample from the batch and keep the batch dimension
+            single_sample = {k: v[idx].unsqueeze(0) for k, v in batch.items()}
+            self.log_plot_to_clearml(pl_module, task.get_logger(), single_sample, trainer.current_epoch, idx)
         
-    def log_plot_to_clearml(self, pl_module, logger, single_sample, current_epoch):
+    def log_plot_to_clearml(self, pl_module, logger, single_sample, current_epoch, scene_idx: int):
         
         with torch.no_grad():
-            historical_features = concatenate_historical_features(single_sample).unsqueeze(0).to(pl_module.device)
-            predicted_positions = pl_module.model(historical_features, single_sample["history_availabilities"].unsqueeze(0).to(pl_module.device))
+            historical_features = concatenate_historical_features(single_sample).to(pl_module.device)
+            predicted_positions = pl_module.model(historical_features, single_sample["history_availabilities"].to(pl_module.device))
             predicted_positions = predicted_positions[0].cpu().numpy()
 
-        history_positions = single_sample["history_positions"].cpu().numpy()
-        target_positions = single_sample["target_positions"].cpu().numpy()
-        history_availabilities = single_sample["history_availabilities"].cpu().numpy()
-        target_availabilities = single_sample["target_availabilities"].cpu().numpy()
+        history_positions = single_sample["history_positions"][0].cpu().numpy()
+        target_positions = single_sample["target_positions"][0].cpu().numpy()
+        history_availabilities = single_sample["history_availabilities"][0].cpu().numpy()
+        target_availabilities = single_sample["target_availabilities"][0].cpu().numpy()
             
         n_agents = history_positions.shape[0]
         
@@ -150,14 +160,14 @@ class OnTrainCallback(L.Callback):
         image = Image.open(buf)
         if image.mode == 'RGBA':
             image = image.convert('RGB')
-        logger.report_image(title="sample", series="plot", iteration=current_epoch, image=image)
+        logger.report_image(title="sample", series=f"scene{scene_idx}", iteration=current_epoch, image=image)
 
 
 class LightningModule(L.LightningModule):
         def __init__(self):
             super().__init__()
             self.n_timesteps = 30
-            self.model = SimpleAgentPrediction(input_features=5, hidden_size=128, n_timesteps=self.n_timesteps)
+            self.model = SimpleAgentPrediction(input_features=10, hidden_size=128, n_timesteps=self.n_timesteps)
 
         def training_step(self, batch, batch_idx):
             historical_features = concatenate_historical_features(batch)
