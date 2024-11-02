@@ -12,6 +12,7 @@ import lightning as L
 from waymo_loader.dataloaders import  WaymoH5Dataset, collate_waymo
 from models.rnn_cells import MultiAgentLSTMCell
 
+torch.set_float32_matmul_precision('medium')
 
 def concatenate_historical_features(batch):
     return torch.cat(
@@ -52,7 +53,8 @@ class Decoder(nn.Module):
         outputs = []
         for t in range(self.n_timesteps):
             hidden, context = self.lstm_cell(output, (hidden, context), current_availabilities)
-            output = self.linear(hidden)
+            delta_output = self.linear(hidden)
+            output = output + delta_output
             outputs.append(output)
         
         outputs = torch.stack(outputs, dim=2)
