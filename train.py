@@ -21,14 +21,74 @@ def concatenate_historical_features(batch):
     n_batch, n_agents, n_past, _ = batch["history_positions"].shape
     types = batch["actor_type"].view(n_batch, n_agents, 1)
     types_one_hot = F.one_hot(types.expand(-1, -1, n_past), num_classes=NUM_CLASSES).float()
+    
+    # Add time dimension to the extent tensor and expand it to match the number of past timesteps
+    extent = batch["extent"].view(n_batch, n_agents, 1, -1).expand(-1, -1, n_past, -1)
+    
     return torch.cat(
         [ 
             batch["history_positions"],
             batch["history_velocities"],
             batch["history_yaws"],
+            extent,
             types_one_hot,
         ], axis=-1   
     )
+    
+class ContextGating(nn.Module):
+    def __init__(self, hidden_size, is_identity=False):
+        super(ContextGating, self).__init__()
+        self.linear_features = nn.Linear(hidden_size, hidden_size)
+        self.linear_context = nn.Identity() if is_identity else nn.Linear(hidden_size, hidden_size)
+    
+    def forward(self, hidden, context_embedding):
+        assert hidden.dim() == 3
+        
+        embeddings = self.linear_features(hidden)
+        context = self.linear_context(context_embedding)
+        embeddings = embeddings * context.unsqueeze(1)
+        context = torch.mean(embeddings, dim=1)
+
+        return embeddings, context 
+
+class MultiContextGating(nn.Module):
+    def __init__(self, hidden_size, n_contexts):
+        super(MultiContextGating, self).__init__()
+        self.n_contexts = n_contexts
+        
+        context_gatings = []
+        for idx in range(n_contexts):
+            context_gatings.append(ContextGating(hidden_size, is_identity=(idx == 0)))
+
+        self.context_gatings = nn.ModuleList(context_gatings)
+
+    def _get_initial_context(self, batch_size, hidden_size, device):
+        """Returns a trainable initial context of shape: (batch_size, hidden_size)"""
+        return torch.ones(batch_size, hidden_size, device=device, requires_grad=True)
+    
+    def _compute_running_mean(self, previous_mean, new_value, i):
+        return (previous_mean * i + new_value) / i
+    
+    def forward(self, hidden):
+        """Hidden has shape (batch_size, n_agents, hidden_size)
+
+        Returns the mean of the hidden states after applying the context gating mechanism
+
+        The return tensor has shape (batch_size, n_agents, hidden_size)
+        """
+        assert hidden.dim() == 3
+        context = self._get_initial_context(hidden.size(0), hidden.size(2), hidden.device)
+        
+        previous_hidden_mean = hidden
+        previous_context_mean = context
+        for idx in range(self.n_contexts):
+            hidden, context = self.context_gatings[idx](previous_hidden_mean, previous_context_mean)
+            
+            previous_hidden_mean = self._compute_running_mean(previous_hidden_mean, hidden, idx + 1)
+            previous_context_mean = self._compute_running_mean(previous_context_mean, context, idx + 1)
+        
+        return previous_hidden_mean 
+    
 
 class Encoder(nn.Module):
     def __init__(self, input_size, hidden_size):
@@ -74,10 +134,13 @@ class SimpleAgentPrediction(nn.Module):
     def __init__(self, input_features, hidden_size, n_timesteps):
         super(SimpleAgentPrediction, self).__init__()
         self.encoder = Encoder(input_features, hidden_size)
+        self.mcg = MultiContextGating(hidden_size, 4)
         self.decoder = Decoder(self.XY_OUTPUT_SIZE, hidden_size, self.XY_OUTPUT_SIZE, n_timesteps)
 
     def forward(self, history_features, history_availabilities):
         hidden, context = self.encoder(history_features, history_availabilities)
+        
+        hidden = self.mcg(hidden)
         
         current_positions = history_features[:, :, -1, :2] # For now only takes positions
         current_availabilities = history_availabilities[:, :, -1]
@@ -91,7 +154,7 @@ def compute_loss(predicted_positions, target_positions, target_availabilities):
     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
     return torch.mean(errors * target_availabilities)
 
-task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction") 
+task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG") 
 
 class OnTrainCallback(L.Callback):
     def on_train_epoch_end(self, trainer, pl_module):
@@ -106,6 +169,10 @@ class OnTrainCallback(L.Callback):
             self.log_plot_to_clearml(pl_module, task.get_logger(), single_sample, trainer.current_epoch, idx)
         
     def log_plot_to_clearml(self, pl_module, logger, single_sample, current_epoch, scene_idx: int):
+        """Creates the image of a single scenario and logs it to ClearML.
+        
+        Assumption: Each component of the scenario has the batch dimension of size 1
+        """
         
         with torch.no_grad():
             historical_features = concatenate_historical_features(single_sample).to(pl_module.device)
@@ -167,7 +234,7 @@ class LightningModule(L.LightningModule):
         def __init__(self):
             super().__init__()
             self.n_timesteps = 30
-            self.model = SimpleAgentPrediction(input_features=10, hidden_size=128, n_timesteps=self.n_timesteps)
+            self.model = SimpleAgentPrediction(input_features=13, hidden_size=128, n_timesteps=self.n_timesteps)
 
         def training_step(self, batch, batch_idx):
             historical_features = concatenate_historical_features(batch)
@@ -197,7 +264,7 @@ class LightningModule(L.LightningModule):
             return optimizer
 
 
-def main(data_dir, fast_dev_run):
+def main(data_dir, fast_dev_run, use_gpu):
     dataset = WaymoH5Dataset(data_dir)
     
     train_loader = DataLoader(
@@ -225,16 +292,17 @@ def main(data_dir, fast_dev_run):
         )
 
     module = LightningModule()
-    trainer = L.Trainer(max_epochs=30, accelerator="gpu", devices=1, fast_dev_run=fast_dev_run, callbacks=OnTrainCallback())
+    trainer = L.Trainer(max_epochs=30, accelerator="gpu" if use_gpu else "cpu", devices=1, fast_dev_run=fast_dev_run, callbacks=OnTrainCallback())
     trainer.fit(model=module, train_dataloaders=train_loader, val_dataloaders=val_loader)
    
 
 def _parse_arguments() -> Namespace:
     parser = ArgumentParser(allow_abbrev=True)
     parser.add_argument("--data-dir", type=str, required=True, help="Path to the folder with the tf records.")
-    parser.add_argument("--fast-dev-run", action="store_true", help="Path to the folder with the tf records.")
+    parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
+    parser.add_argument("--gpu", action="store_true", help="Use GPU")
     return parser.parse_args()
 
 if __name__ == "__main__":
     args = _parse_arguments()
-    main(args.data_dir, args.fast_dev_run)
+    main(args.data_dir, args.fast_dev_run, args.gpu)
