@@ -7,18 +7,21 @@ from torch import Tensor
 from common_utils.tensor_utils import flatten_agent_dim, expand_agent_dim
 
 
-
 class MultiAgentLSTMCell(nn.Module):
     def __init__(self, in_dim: int, out_dim: int) -> None:
         super().__init__()
         self.inner_lstm_cell = nn.LSTMCell(in_dim, out_dim)
 
-    def get_initial_hidden_state(self, shape: tuple, device: torch.device) -> Tuple[Tensor, Tensor]:
-        h = torch.zeros(shape, device=device)
-        c = torch.zeros(shape, device=device)
+    def get_initial_hidden_state(
+        self, shape: tuple, device: torch.device, requires_grad: bool = False
+    ) -> Tuple[Tensor, Tensor]:
+        h = torch.zeros(shape, requires_grad=requires_grad, device=device)
+        c = torch.zeros(shape, requires_grad=requires_grad, device=device)
         return h, c
 
-    def forward(self, _input: Tensor, hidden: Tuple[Tensor, Tensor], mask: Optional[Tensor] = None) -> Tuple[Tensor, Tensor]:
+    def forward(
+        self, _input: Tensor, hidden: Tuple[Tensor, Tensor], mask: Optional[Tensor] = None
+    ) -> Tuple[Tensor, Tensor]:
         n_batch, n_agents, _ = _input.shape
 
         h_flat = flatten_agent_dim(hidden[0])
@@ -33,7 +36,7 @@ class MultiAgentLSTMCell(nn.Module):
 
         # Mask unvalid hidden states
         if mask is not None:
-            mask = mask.unsqueeze(-1).float() # Add feature dimension and mask this
+            mask = mask.unsqueeze(-1).float()  # Add feature dimension and mask this
             h = h_next * mask + hidden[0] * (1 - mask)
             c = c_next * mask + hidden[1] * (1 - mask)
         else:
