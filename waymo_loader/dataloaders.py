@@ -21,6 +21,8 @@ from waymo_loader.feature_description import get_feature_description, STATE_FEAT
 # have numpy arrays or torch tensors
 Array = TypeVar("Array", np.ndarray, Tensor)
 
+MAX_NUM_AGENTS = 8
+
 
 @dataclass
 class MultiAgentFeatures(Generic[Array]):
@@ -206,29 +208,37 @@ class WaymoDatasetHelper(object):
 
 
 def _generate_features(
-    decoded_example: Dict[str, np.ndarray], future_num_frames=80, max_n_agents=8
+    decoded_example: Dict[str, np.ndarray], future_num_frames=80, max_n_agents=MAX_NUM_AGENTS
 ) -> Dict[str, np.ndarray]:
     # If a sample was not seen at all in the past, we declare the sample as invalid.
     tracks_to_predict = (decoded_example["state/tracks_to_predict"].squeeze() > 0).astype(np.bool_)
+    is_sdc_mask = (decoded_example["state/is_sdc"].squeeze() > 0).astype(np.bool_)
+    # The sdc is also considered so that we can retrieve its features
+    tracks_to_predict = np.logical_or(tracks_to_predict, is_sdc_mask)
 
     multi_agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
     multi_agent_features.crop_to_desired_prediction_horizon(future_num_frames)
 
-    # # Get the index of the self driving car to transform to an ego-centric scene
-    # self_driving_car_index = multi_agent_features.is_sdc.squeeze()
+    # Get the index of the self driving car to transform to an ego-centric scene,
+    # do this before removing the unwanted agents because it could be that we do not
+    # want to predict ego
+    ego_idx = np.argmax(multi_agent_features.is_sdc.squeeze())
+    ego_centroid = multi_agent_features.centroid[ego_idx]
+    ego_yaw = multi_agent_features.yaw[ego_idx]
 
     # Now remove the unwanted agents by filtering with tracks to predict
     multi_agent_features.filter_with_mask(tracks_to_predict)
 
     # From the surviving agents choose the firs one's centroid and yaw to center the scene
     to_sdc_se3 = get_transformation_matrix(
-        multi_agent_features.centroid[0],
-        multi_agent_features.yaw[0],
+        ego_centroid,
+        ego_yaw,
     )
     multi_agent_features.transform_with_se3(to_sdc_se3)
 
-    # Now pad the remaining agents to the max number of agents, needed to have tensors the same size
-    multi_agent_features.force_pad_batch_size(max_n_agents)
+    # Now pad the remaining agents to the max number of agents, needed to have tensors the same size.
+    # We also add 1 to the max number of agents to account for the ego vehicle
+    multi_agent_features.force_pad_batch_size(max_n_agents + 1)
 
     return multi_agent_features.__dict__
 

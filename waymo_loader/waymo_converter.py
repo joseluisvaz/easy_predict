@@ -14,6 +14,7 @@ from feature_description import get_feature_description, STATE_FEATURES
 
 VALIDATION_LENGTH = 44102
 BATCH_SIZE = 200  # Adjust the batch size as needed
+MAX_AGENTS = 128
 
 FEATURE_DESCRIPTION: T.Dict = dict(STATE_FEATURES)
 
@@ -28,12 +29,12 @@ def _parse_arguments() -> Namespace:
 
 
 def _generate_records_from_files(
-    files: T.List[str], max_agents: int = 8
+    files: T.List[str], max_agents: int = MAX_AGENTS
 ) -> T.Generator[T.Dict[str, np.ndarray], None, None]:
     """Generates the records from the files."""
     dataset = tf.data.TFRecordDataset(files, compression_type="")
     for payload in dataset.as_numpy_iterator():
-        decoded_example = tf.io.parse_single_example(payload, FEATURE_DESCRIPTION)
+        decoded_example = tf.io.parse_single_example(payload, get_feature_description())
         processed_example = {}
 
         # Convert tensors to numpy arrays
@@ -41,25 +42,29 @@ def _generate_records_from_files(
             decoded_example[key] = value.numpy()
 
         # Apply the tracks_to_predict mask
-        mask = decoded_example["state/tracks_to_predict"] > 0
+        # track_mask = decoded_example["state/tracks_to_predict"] > 0
+        # sdc_mask = decoded_example["state/is_sdc"] > 0
+        # mask = track_mask & sdc_mask
 
         for key, value in decoded_example.items():
+            if key not in STATE_FEATURES:
+                continue
             # TODO: Implement parsing of map features
-            cropped_value = value[mask]
-            # Pad the cropped value to max_agents
-            if cropped_value.shape[0] < max_agents:
-                padding = ((0, max_agents - cropped_value.shape[0]),) + ((0, 0),) * (
-                    cropped_value.ndim - 1
-                )
-                padded_value = np.pad(cropped_value, padding, mode="constant", constant_values=0)
-            else:
-                padded_value = cropped_value[:max_agents]
+            # cropped_value = value[mask]
+            # # Pad the cropped value to max_agents
+            # if cropped_value.shape[0] < max_agents:
+            #     padding = ((0, max_agents - cropped_value.shape[0]),) + ((0, 0),) * (
+            #         cropped_value.ndim - 1
+            #     )
+            #     padded_value = np.pad(cropped_value, padding, mode="constant", constant_values=0)
+            # else:
+            #     padded_value = cropped_value[:max_agents]
 
             # For the features with a single dimension, add an extra for concatenation
-            if len(padded_value.shape) == 1:
-                padded_value = np.expand_dims(padded_value, axis=1)
+            if len(value.shape) == 1:
+                value = np.expand_dims(value, axis=1)
 
-            processed_example[key] = padded_value
+            processed_example[key] = value
 
         # Iterate ver the ordered features and create a vector
         feature_sequence = []
@@ -84,7 +89,9 @@ def _get_file_list(data_dir: str) -> T.List[str]:
     return [str(file) for file in pathlib.Path(data_dir).absolute().rglob("*") if file.is_file()]
 
 
-def _create_h5_datasets(file: h5py.File, new_data: np.ndarray, max_agents: int = 8) -> None:
+def _create_h5_datasets(
+    file: h5py.File, new_data: np.ndarray, max_agents: int = MAX_AGENTS
+) -> None:
     """Create a dataset in the h5 file for every field in the new data sample."""
     tensor = np.expand_dims(new_data, axis=0)  # Add batch dimension
     maxshape = (None, max_agents, *tensor.shape[2:])
