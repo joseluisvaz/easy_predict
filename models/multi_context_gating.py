@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch_scatter import scatter_max
 
 
 class ContextGating(nn.Module):
@@ -17,6 +18,9 @@ class ContextGating(nn.Module):
         """
         hidden of size (batch, agents, features)
         context_embeddig (batch, features)
+        availabilities (batch, agents)
+
+        Returns the embeddings of size (batch, agents, features) and the context of size (batch, features)
         """
         assert hidden.dim() == 3 and context_embedding.dim() == 2
 
@@ -24,14 +28,16 @@ class ContextGating(nn.Module):
         context = self.linear_context(context_embedding)
         embeddings = embeddings * context.unsqueeze(1)
 
-        # Make it scatter_mean or scatter_max
-        # aggregations = []
-        # for idx in range(embeddings.shape[0]):
-        #     aggregations.append(torch.max(embeddings[idx, availabilities[idx]], dim=0)[0])
 
-        # context = torch.stack(aggregations, dim=0)
-        context = torch.max(embeddings, dim=1)[0]
+        # TODO make the max pooling a utility function
+        batch_size, _, output_size = embeddings.shape
+        arange = torch.arange(0, batch_size, device=hidden.device)
+        expanded_range = arange.unsqueeze(1).expand(-1, hidden.size(1))  # (batch, agents)
 
+        scatter_index = expanded_range[availabilities]
+        embeddings_flattened = embeddings[availabilities].view(-1, output_size)
+        context, _ = scatter_max(embeddings_flattened, scatter_index, dim=0)
+        
         return embeddings, context
 
 

@@ -169,10 +169,13 @@ class LightningModule(L.LightningModule):
 def main(data_dir, fast_dev_run, use_gpu):
     dataset = WaymoH5Dataset(data_dir)
 
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA version: {torch.version.cuda}")
+
     train_loader = DataLoader(
         dataset,
-        batch_size=512,
-        num_workers=8,
+        batch_size=256,
+        num_workers=16,
         shuffle=True,
         persistent_workers=True,
         pin_memory=False,
@@ -183,8 +186,8 @@ def main(data_dir, fast_dev_run, use_gpu):
 
     val_loader = DataLoader(
         dataset,
-        batch_size=512,
-        num_workers=8,
+        batch_size=256,
+        num_workers=16,
         shuffle=False,
         persistent_workers=True,
         pin_memory=False,

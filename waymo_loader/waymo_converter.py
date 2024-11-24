@@ -10,7 +10,7 @@ import multiprocessing as mp
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 
-from feature_description import get_feature_description, STATE_FEATURES
+from feature_description import get_feature_description, STATE_FEATURES, ROADGRAPH_FEATURES
 
 VALIDATION_LENGTH = 44102
 BATCH_SIZE = 200  # Adjust the batch size as needed
@@ -28,51 +28,52 @@ def _parse_arguments() -> Namespace:
     return parser.parse_args()
 
 
+def process_roadgraph_features(decoded_example: T.Dict[str, np.ndarray]) -> np.ndarray:
+    """Return the merged ordered map of roadgraph features."""
+    return np.concatenate([decoded_example[key] for key in ROADGRAPH_FEATURES], axis=-1)
+
+
+def process_merged_agent_features(decoded_example: T.Dict[str, np.ndarray]) -> np.ndarray:
+    """Merge the agent features into a single numpy array."""
+    processed_example = {}
+    # track_mask = numpy_example["state/tracks_to_predict"] > 0
+    # sdc_mask = numpy_example["state/is_sdc"] > 0
+    # mask = track_mask & sdc_mask
+    for key, value in decoded_example.items():
+        if key not in STATE_FEATURES:
+            continue
+
+        # cropped_value = value[mask]
+        # # Pad the cropped value to max_agents
+        # if cropped_value.shape[0] < max_agents:
+        #     padding = ((0, max_agents - cropped_value.shape[0]),) + ((0, 0),) * (
+        #         cropped_value.ndim - 1
+        #     )
+        #     padded_value = np.pad(cropped_value, padding, mode="constant", constant_values=0)
+        # else:
+        #     padded_value = cropped_value[:max_agents]
+
+        # For the features with a single dimension, add an extra for concatenation
+        if len(value.shape) == 1:
+            value = np.expand_dims(value, axis=1)
+        processed_example[key] = value
+
+    # NOTE: State features is an ordered map
+    return np.concatenate([processed_example[key] for key in STATE_FEATURES], axis=-1)
+
+
 def _generate_records_from_files(
-    files: T.List[str], max_agents: int = MAX_AGENTS
-) -> T.Generator[T.Dict[str, np.ndarray], None, None]:
+    files: T.List[str],
+) -> T.Generator[T.Tuple[np.ndarray, np.ndarray], None, None]:
     """Generates the records from the files."""
     dataset = tf.data.TFRecordDataset(files, compression_type="")
+
     for payload in dataset.as_numpy_iterator():
         decoded_example = tf.io.parse_single_example(payload, get_feature_description())
-        processed_example = {}
-
-        # Convert tensors to numpy arrays
-        for key, value in decoded_example.items():
-            decoded_example[key] = value.numpy()
-
-        # Apply the tracks_to_predict mask
-        # track_mask = decoded_example["state/tracks_to_predict"] > 0
-        # sdc_mask = decoded_example["state/is_sdc"] > 0
-        # mask = track_mask & sdc_mask
-
-        for key, value in decoded_example.items():
-            if key not in STATE_FEATURES:
-                continue
-            # TODO: Implement parsing of map features
-            # cropped_value = value[mask]
-            # # Pad the cropped value to max_agents
-            # if cropped_value.shape[0] < max_agents:
-            #     padding = ((0, max_agents - cropped_value.shape[0]),) + ((0, 0),) * (
-            #         cropped_value.ndim - 1
-            #     )
-            #     padded_value = np.pad(cropped_value, padding, mode="constant", constant_values=0)
-            # else:
-            #     padded_value = cropped_value[:max_agents]
-
-            # For the features with a single dimension, add an extra for concatenation
-            if len(value.shape) == 1:
-                value = np.expand_dims(value, axis=1)
-
-            processed_example[key] = value
-
-        # Iterate ver the ordered features and create a vector
-        feature_sequence = []
-        for key in STATE_FEATURES:
-            feature_sequence.append(processed_example[key])
-
-        merged_features = np.concatenate(feature_sequence, axis=-1)
-        yield merged_features
+        numpy_example = {key: value.numpy() for key, value in decoded_example.items()}
+        yield process_merged_agent_features(numpy_example), process_roadgraph_features(
+            numpy_example
+        )
 
 
 def _process_files(file_paths: T.List[str], queue: mp.Queue, progress_bar: tqdm) -> None:
@@ -90,23 +91,50 @@ def _get_file_list(data_dir: str) -> T.List[str]:
 
 
 def _create_h5_datasets(
-    file: h5py.File, new_data: np.ndarray, max_agents: int = MAX_AGENTS
+    file: h5py.File, new_data: T.Tuple[np.ndarray, np.ndarray], max_agents: int = MAX_AGENTS
 ) -> None:
     """Create a dataset in the h5 file for every field in the new data sample."""
-    tensor = np.expand_dims(new_data, axis=0)  # Add batch dimension
-    maxshape = (None, max_agents, *tensor.shape[2:])
+    actor_data, roadgraph_data = new_data
+    
+    actor_tensor = np.expand_dims(actor_data, axis=0)  # Add batch dimension
+    actor_maxshape = (None, max_agents, *actor_tensor.shape[2:])
+
+    roadgraph_tensor = np.expand_dims(roadgraph_data, axis=0)  # Add batch dimension
+    roadgraph_maxshape = (None, *roadgraph_tensor.shape[1:])
+
     file.create_dataset(
-        "merged_features", data=tensor, chunks=True, maxshape=maxshape, compression="gzip"
+        "actor_merged_features",
+        data=actor_tensor,
+        chunks=True,
+        maxshape=actor_maxshape,
+        compression="gzip",
+    )
+    file.create_dataset(
+        "roadgraph_merged_features",
+        data=roadgraph_tensor,
+        chunks=True,
+        maxshape=roadgraph_maxshape,
+        compression="gzip",
     )
 
 
-def _append_to_h5_datasets(file: h5py.File, batch_data: T.List[np.ndarray]) -> None:
+def _append_to_h5_datasets(
+    file: h5py.File, batch_data: T.List[T.Tuple[np.ndarray, np.ndarray]]
+) -> None:
     """Append a batch of new data samples to the h5 file."""
-    tensors = [np.expand_dims(data, axis=0) for data in batch_data]  # Add batch dimension
-    tensors = np.concatenate(tensors, axis=0)
-    number_of_elements = file["merged_features"].shape[0]
-    file["merged_features"].resize(number_of_elements + tensors.shape[0], axis=0)
-    file["merged_features"][-tensors.shape[0] :] = tensors
+
+    def add_to_dataset(dataset_name: str, batch_data: T.List[np.ndarray]) -> None:
+        tensors = [np.expand_dims(data, axis=0) for data in batch_data]
+        tensors = [np.expand_dims(data, axis=0) for data in batch_data]  # Add batch dimension
+        tensors = np.concatenate(tensors, axis=0)
+        number_of_elements = file[dataset_name].shape[0]
+        file[dataset_name].resize(number_of_elements + tensors.shape[0], axis=0)
+        file[dataset_name][-tensors.shape[0] :] = tensors
+
+    actor_data = [data[0] for data in batch_data]
+    roadgraph_data = [data[1] for data in batch_data]
+    add_to_dataset("actor_merged_features", actor_data)
+    add_to_dataset("roadgraph_merged_features", roadgraph_data)
 
 
 def _convert_to_h5(data_dir: str, out_path: str) -> None:

@@ -58,13 +58,24 @@ WAYMO_AGENT_TO_COLOR = {
     3: "black",  # other
 }
 
-ROADGRAPH_FEATURES = {
-    "roadgraph_samples/dir": tf.io.FixedLenFeature([20000, 3], tf.float32, default_value=None),
-    "roadgraph_samples/id": tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None),
-    "roadgraph_samples/type": tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None),
-    "roadgraph_samples/valid": tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None),
-    "roadgraph_samples/xyz": tf.io.FixedLenFeature([20000, 3], tf.float32, default_value=None),
-}
+ROADGRAPH_FEATURES = OrderedDict(
+    [
+        (
+            "roadgraph_samples/dir",
+            tf.io.FixedLenFeature([20000, 3], tf.float32, default_value=None),
+        ),
+        ("roadgraph_samples/id", tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None)),
+        ("roadgraph_samples/type", tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None)),
+        (
+            "roadgraph_samples/valid",
+            tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None),
+        ),
+        (
+            "roadgraph_samples/xyz",
+            tf.io.FixedLenFeature([20000, 3], tf.float32, default_value=None),
+        ),
+    ]
+)
 
 STATE_FEATURES = OrderedDict(
     [
@@ -157,7 +168,7 @@ TRAFFIC_LIGHT_FEATURES = {
 
 def get_feature_description() -> Dict:
     features_description = {}
-    features_description.update(ROADGRAPH_FEATURES)
+    features_description.update(dict(ROADGRAPH_FEATURES))
     features_description.update(dict(STATE_FEATURES))
     features_description.update(TRAFFIC_LIGHT_FEATURES)
     return features_description
