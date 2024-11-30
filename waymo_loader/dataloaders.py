@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Generic, TypeVar
+from typing import Any, Dict, List, Optional, Generic, TypeVar 
+from collections import OrderedDict
 
 import h5py
 import numpy as np
@@ -15,14 +16,17 @@ from common_utils.geometry import (
     get_yaw_from_se2,
 )
 from common_utils.tensor_utils import force_pad_batch_size
-from waymo_loader.feature_description import get_feature_description, STATE_FEATURES
+from waymo_loader.feature_description import (
+    STATE_FEATURES,
+    ROADGRAPH_FEATURES,
+)
 
 # Define generic type for arrays so that we can inspect when our features
 # have numpy arrays or torch tensors
 Array = TypeVar("Array", np.ndarray, Tensor)
 
 MAX_NUM_AGENTS = 8
-
+MAX_POLYLINE_LENGTH = 100
 
 @dataclass
 class MultiAgentFeatures(Generic[Array]):
@@ -126,20 +130,34 @@ class MultiAgentFeatures(Generic[Array]):
         self.target_availabilities = self.target_availabilities[:, :desired_length]
 
 
-DatasetOutputDicts = Dict[str, Array]
+# def generate_roadgraph_features_dict(
+#     roadgraph_features: RoadGraphSampleFeatures[np.ndarray],
+# ) -> np.ndarray:
+
+#     # TODO: Implement the traffic lights parsing
+#     # if config.model_params.use_traffic_lights:
+#     #     traffic_lights_features = utils.one_hot_numpy_adaptor(
+#     #         dataset_output.roadgraph_features.roadgraph_tl_status, config.model_params.n_traffic_light_status_types
+#     #     )
+#     #     features.append(traffic_lights_features)
+
+#     # The numerical values are not contiguous, we remap them to an ordered sequence of integers
+#     mapping_fn = np.vectorize(lambda a: _ROADGRAPH_SAMPLE_TYPE_MAP_RESAMPLED.get(a, a))
+#     ordinal_values = mapping_fn(roadgraph_features.map_elements_type_idx.astype(int))
+
+#     # Numpy does not have a one hot encoding function, we use pytorch to do it.
+#     n_types = len(list(_ROADGRAPH_SAMPLE_TYPE_MAP_RESAMPLED))
+#     one_hot_encoded = F.one_hot(torch.from_numpy(ordinal_values), n_types).numpy()
+
+#     features = [
+#         roadgraph_features.roadgraph_xy,
+#         roadgraph_features.roadgraph_dir,
+#         one_hot_encoded,
+#     ]
+#     return np.concatenate(features, -1)
 
 
 class WaymoDatasetHelper(object):
-    @staticmethod
-    def get_extent(decoded_example: Dict[str, np.ndarray]) -> np.ndarray:
-        return np.concatenate(
-            [
-                decoded_example["state/current/length"],
-                decoded_example["state/current/width"],
-                decoded_example["state/current/height"],
-            ],
-            axis=-1,
-        )
 
     @staticmethod
     def generate_multi_agent_features(
@@ -181,6 +199,15 @@ class WaymoDatasetHelper(object):
             axis=-1,
         )
 
+        extent = np.concatenate(
+            [
+                decoded_example["state/current/length"],
+                decoded_example["state/current/width"],
+                decoded_example["state/current/height"],
+            ],
+            axis=-1,
+        )
+
         history_states = np.concatenate([past_states, cur_states], axis=1)
         history_availabilities = np.concatenate(
             [decoded_example["state/past/valid"] > 0, decoded_example["state/current/valid"] > 0],
@@ -201,62 +228,95 @@ class WaymoDatasetHelper(object):
             centroid=cur_states[..., :2].astype(np.float32),
             yaw=cur_states[..., 2, None].astype(np.float32),
             speed=cur_states[..., 5, None].astype(np.float32),
-            extent=WaymoDatasetHelper.get_extent(decoded_example).astype(np.float32),
+            extent=extent.astype(np.float32),
             actor_type=decoded_example["state/type"].astype(np.intp),
             is_sdc=decoded_example["state/is_sdc"].astype(np.bool_),
         )
 
 
+
+
+def _parse_roadgraph_features(decoded_example: Dict[str, np.ndarray], to_ego_se3: np.ndarray) -> Dict[str, torch.Tensor]:
+    # get only the rotation component to transform the polyline directions 
+    # rotation = get_so2_from_se2(to_ego_se3)  
+    points = transform_points(decoded_example["roadgraph_samples/xyz"][:, :2], to_ego_se3)
+
+    ids = decoded_example["roadgraph_samples/id"][:, 0]
+    valid = decoded_example["roadgraph_samples/valid"][:, 0].astype(np.bool_)
+    
+    valid_points = points[valid]
+    valid_ids = ids[valid].astype(np.int32)
+
+    unique_ids, _ = np.unique(valid_ids, return_counts=True)
+    
+    # Chop the polylines into smaller pieces to have minimum length
+    chopped_polylines = []
+    for id in unique_ids:
+        polyline = valid_points[valid_ids == id]
+        for i in range(0, len(polyline), MAX_POLYLINE_LENGTH):
+            chopped_polylines.append(polyline[i : i + MAX_POLYLINE_LENGTH])
+
+    masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
+    
+    nested_tensor = torch.nested.nested_tensor(chopped_polylines, dtype=torch.float)
+    padded_tensor = torch.nested.to_padded_tensor(nested_tensor, padding=0.0)
+
+    nested_masks = torch.nested.nested_tensor(masks, dtype=torch.bool)
+    padded_tensor_mask = torch.nested.to_padded_tensor(nested_masks, padding=False)
+    return {"roadgraph_features": padded_tensor.numpy(), "roadgraph_features_mask": padded_tensor_mask.numpy()}
+
+
 def _generate_features(
     decoded_example: Dict[str, np.ndarray], future_num_frames=80, max_n_agents=MAX_NUM_AGENTS
 ) -> Dict[str, np.ndarray]:
-    # If a sample was not seen at all in the past, we declare the sample as invalid.
+    # The sdc is also considered so that we can retrieve its features
     tracks_to_predict = (decoded_example["state/tracks_to_predict"].squeeze() > 0).astype(np.bool_)
     is_sdc_mask = (decoded_example["state/is_sdc"].squeeze() > 0).astype(np.bool_)
-    # The sdc is also considered so that we can retrieve its features
     tracks_to_predict = np.logical_or(tracks_to_predict, is_sdc_mask)
 
     multi_agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
     multi_agent_features.crop_to_desired_prediction_horizon(future_num_frames)
-
-    # Get the index of the self driving car to transform to an ego-centric scene,
-    # do this before removing the unwanted agents because it could be that we do not
-    # want to predict ego
-    ego_idx = np.argmax(multi_agent_features.is_sdc.squeeze())
-    ego_centroid = multi_agent_features.centroid[ego_idx]
-    ego_yaw = multi_agent_features.yaw[ego_idx]
-
     # Now remove the unwanted agents by filtering with tracks to predict
     multi_agent_features.filter_with_mask(tracks_to_predict)
 
-    # From the surviving agents choose the firs one's centroid and yaw to center the scene
+    # Transform the scene to have the ego vehicle at the origin
+    ego_idx = np.argmax(multi_agent_features.is_sdc.squeeze())
     to_sdc_se3 = get_transformation_matrix(
-        ego_centroid,
-        ego_yaw,
+        multi_agent_features.centroid[ego_idx],
+        multi_agent_features.yaw[ego_idx],
     )
     multi_agent_features.transform_with_se3(to_sdc_se3)
+    map_features = _parse_roadgraph_features(decoded_example, to_sdc_se3)
 
     # Now pad the remaining agents to the max number of agents, needed to have tensors the same size.
     # We also add 1 to the max number of agents to account for the ego vehicle
     multi_agent_features.force_pad_batch_size(max_n_agents + 1)
-
-    return multi_agent_features.__dict__
+    return multi_agent_features.__dict__, map_features 
 
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
-    # Collate the normal features like normal tensors, and convert it to pytorch
-    batch = default_collate(payloads)
-    torch_batch = default_convert(batch)
-    return torch_batch
+    # Maps should be collated differently (concatenated in the same dimension)
+    batch = dict()
+    batch.update(default_collate([value[0] for value in payloads]))
+
+    batch["roadgraph_features"] = torch.nested.nested_tensor(
+        [value[1]["roadgraph_features"] for value in payloads]
+    )
+    batch["roadgraph_features_mask"] = torch.nested.nested_tensor(
+        [value[1]["roadgraph_features_mask"] for value in payloads]
+    )
+    return default_convert(batch)
 
 
-def parse_concatenated_tensor(concatenated_tensor: np.ndarray):
+def parse_concatenated_tensor(
+    concatenated_tensor: np.ndarray, feature_dict: OrderedDict
+) -> Dict[str, np.ndarray]:
 
     agent_length, _ = concatenated_tensor.shape
 
     parsed_features = {}
     start_idx = 0
-    for feature_name, feature_descriptor in STATE_FEATURES.items():
+    for feature_name, feature_descriptor in feature_dict.items():
         shape = feature_descriptor.shape
         feature_length = shape[1] if len(shape) > 1 else 1
 
@@ -278,7 +338,7 @@ class WaymoH5Dataset(Dataset):
 
         # Open and close dataset just to extract the length
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
-            self.dataset_len = len(file["merged_features"])
+            self.dataset_len = len(file["actor_merged_features"])
 
     def __len__(self) -> int:
         return self.dataset_len
@@ -288,12 +348,17 @@ class WaymoH5Dataset(Dataset):
         if self.dataset is None:
             self.dataset = h5py.File(self.filepath, "r", libver="latest", swmr=True)
 
-        merged_features = np.array(self.dataset["merged_features"][idx])
-        data_fetched = parse_concatenated_tensor(merged_features)
+        actor_merged_features = np.array(self.dataset["actor_merged_features"][idx])
+        roadgraph_merged_features = np.array(self.dataset["roadgraph_merged_features"][idx])
 
-        features = _generate_features(data_fetched)
-        return features
+        data_fetched = {}
+        data_fetched.update(parse_concatenated_tensor(actor_merged_features, STATE_FEATURES))
+        data_fetched.update(
+            parse_concatenated_tensor(roadgraph_merged_features, ROADGRAPH_FEATURES)
+        )
+        return _generate_features(data_fetched)
 
     def __del__(self):
         if self.dataset is not None:
             self.dataset.close()
+

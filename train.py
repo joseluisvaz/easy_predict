@@ -1,41 +1,28 @@
 import io
 from argparse import ArgumentParser, Namespace
+import itertools
+import warnings
+
+# Ignore the warning about nested tensors to not spam the terminal
+warnings.filterwarnings(
+    "ignore",
+    message="The PyTorch API of nested tensors is in prototype stage and will change in the near future.",
+)
 
 from PIL import Image
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
+torch.autograd.set_detect_anomaly(True)
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 from clearml import Task
 import lightning as L
+from lightning.pytorch.tuner import Tuner
 
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
 from models.multipath_based import MultiPathBased
 
 torch.set_float32_matmul_precision("medium")
-
-NUM_CLASSES = 5
-
-
-def concatenate_historical_features(batch):
-    n_batch, n_agents, n_past, _ = batch["history_positions"].shape
-    types = batch["actor_type"].view(n_batch, n_agents, 1)
-    types_one_hot = F.one_hot(types.expand(-1, -1, n_past), num_classes=NUM_CLASSES).float()
-
-    # Add time dimension to the extent tensor and expand it to match the number of past timesteps
-    extent = batch["extent"].view(n_batch, n_agents, 1, -1).expand(-1, -1, n_past, -1)
-
-    return torch.cat(
-        [
-            batch["history_positions"],
-            batch["history_velocities"],
-            batch["history_yaws"],
-            extent,
-            types_one_hot,
-        ],
-        axis=-1,
-    )
 
 
 def compute_loss(predicted_positions, target_positions, target_availabilities):
@@ -47,17 +34,25 @@ task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPred
 
 
 class OnTrainCallback(L.Callback):
-    def on_train_epoch_end(self, trainer, pl_module):
-        # do something with all training_step outputs, for example:
-        batch = next(iter(trainer.val_dataloaders))
+    def __init__(self, dataset):
+        super().__init__()
 
-        SAMPLE_IMAGES = 5
-        n_batch = batch["history_positions"].shape[0]
-        for idx in range(0, min(SAMPLE_IMAGES, n_batch)):
+        self._n_samples = 5
+        self._dataloader = DataLoader(
+            dataset,
+            batch_size=1,
+            num_workers=0,
+            shuffle=False,
+            collate_fn=collate_waymo,
+        )
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        for idx, single_sample_batch in enumerate(
+            itertools.islice(self._dataloader, self._n_samples)
+        ):
             # Just extract a single sample from the batch and keep the batch dimension
-            single_sample = {k: v[idx].unsqueeze(0) for k, v in batch.items()}
             self.log_plot_to_clearml(
-                pl_module, task.get_logger(), single_sample, trainer.current_epoch, idx
+                pl_module, task.get_logger(), single_sample_batch, trainer.current_epoch, idx
             )
 
     def log_plot_to_clearml(self, pl_module, logger, single_sample, current_epoch, scene_idx: int):
@@ -66,13 +61,11 @@ class OnTrainCallback(L.Callback):
         Assumption: Each component of the scenario has the batch dimension of size 1
         """
 
+        # Make sure the input is in the gpu
+        single_sample = {k: v.cuda() for k, v in single_sample.items()}
+
         with torch.no_grad():
-            historical_features = concatenate_historical_features(single_sample).to(
-                pl_module.device
-            )
-            predicted_positions = pl_module.model(
-                historical_features, single_sample["history_availabilities"].to(pl_module.device)
-            )
+            predicted_positions = pl_module.model(single_sample)
             predicted_positions = predicted_positions[0].cpu().numpy()
 
         history_positions = single_sample["history_positions"][0].cpu().numpy()
@@ -102,7 +95,19 @@ class OnTrainCallback(L.Callback):
             ground_truth_sequences.append(ground_truth_sequence)
             predicted_sequences.append(predicted_sequence)
 
+        map_features = torch.nested.to_padded_tensor(
+            single_sample["roadgraph_features"], padding=0.0
+        ).cpu()
+        map_avails = torch.nested.to_padded_tensor(
+            single_sample["roadgraph_features_mask"], padding=False
+        ).cpu()
+
+        map_features = map_features.view(-1, 2)
+        map_avails = map_avails.view(-1, 1)
+        map_points = map_features[map_avails[:, 0]]
+
         plt.figure()
+        plt.scatter(map_points[:, 0], map_points[:, 1], s=0.05, c="gray")
         for sequence in past_sequences:
             plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="gray")
         for sequence in ground_truth_sequences:
@@ -114,6 +119,8 @@ class OnTrainCallback(L.Callback):
         plt.xlabel("x")
         plt.ylabel("y")
         plt.grid(True)
+        plt.xlim(-50, 50)
+        plt.ylim(-50, 50)
 
         # Save the plot to an in-memory buffer
         buf = io.BytesIO()
@@ -131,16 +138,18 @@ class OnTrainCallback(L.Callback):
 
 
 class LightningModule(L.LightningModule):
-    def __init__(self):
+    def __init__(self, dataset, fast_dev_run: bool):
         super().__init__()
+        self.dataset = dataset
+        self.fast_dev_run = fast_dev_run
+        self.learning_rate = 0.01
         self.n_timesteps = 30
         self.model = MultiPathBased(
             input_features=13, hidden_size=128, n_timesteps=self.n_timesteps
         )
 
     def training_step(self, batch, batch_idx):
-        historical_features = concatenate_historical_features(batch)
-        predicted_positions = self.model(historical_features, batch["history_availabilities"])
+        predicted_positions = self.model(batch)
 
         # Crop the future positions to match the number of timesteps
         future_positions = batch["target_positions"][:, :, : self.n_timesteps]
@@ -151,8 +160,7 @@ class LightningModule(L.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        historical_features = concatenate_historical_features(batch)
-        predicted_positions = self.model(historical_features, batch["history_availabilities"])
+        predicted_positions = self.model(batch)
 
         # Crop the future positions to match the number of timesteps
         future_positions = batch["target_positions"][:, :, : self.n_timesteps]
@@ -162,8 +170,34 @@ class LightningModule(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return optimizer
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.dataset,
+            batch_size=32 if not self.fast_dev_run else 32,
+            num_workers=8 if not self.fast_dev_run else 1,
+            shuffle=True,
+            persistent_workers=True if not self.fast_dev_run else False,
+            pin_memory=False,
+            drop_last=True,
+            prefetch_factor=8 if not self.fast_dev_run else None,
+            collate_fn=collate_waymo,
+        )
+
+    def val_dataloader(self):
+        return DataLoader(
+            self.dataset,
+            batch_size=32 if not self.fast_dev_run else 32,
+            num_workers=8 if not self.fast_dev_run else 1,
+            shuffle=False,
+            persistent_workers=True if not self.fast_dev_run else False,
+            pin_memory=False,
+            drop_last=True,
+            prefetch_factor=8 if not self.fast_dev_run else None,
+            collate_fn=collate_waymo,
+        )
 
 
 def main(data_dir, fast_dev_run, use_gpu):
@@ -172,39 +206,25 @@ def main(data_dir, fast_dev_run, use_gpu):
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
-    train_loader = DataLoader(
-        dataset,
-        batch_size=256,
-        num_workers=16,
-        shuffle=True,
-        persistent_workers=True,
-        pin_memory=False,
-        drop_last=True,
-        prefetch_factor=8,
-        collate_fn=collate_waymo,
-    )
-
-    val_loader = DataLoader(
-        dataset,
-        batch_size=256,
-        num_workers=16,
-        shuffle=False,
-        persistent_workers=True,
-        pin_memory=False,
-        drop_last=True,
-        prefetch_factor=8,
-        collate_fn=collate_waymo,
-    )
-
-    module = LightningModule()
+    module = LightningModule(dataset, fast_dev_run)
     trainer = L.Trainer(
-        max_epochs=30,
+        max_epochs=10,
         accelerator="gpu" if use_gpu else "cpu",
         devices=1,
         fast_dev_run=fast_dev_run,
-        callbacks=OnTrainCallback(),
+        # precision="16-mixed",
+        callbacks=OnTrainCallback(dataset),
     )
-    trainer.fit(model=module, train_dataloaders=train_loader, val_dataloaders=val_loader)
+
+    tuner = Tuner(trainer)
+    lr_finder = tuner.lr_find(module)
+
+    fig = lr_finder.plot(suggest=True)
+    fig.savefig("learning_rate.png")
+    new_lr = lr_finder.suggestion()
+    print("LEARNING RATE SUGGESTION: ", new_lr)
+
+    trainer.fit(model=module)
 
 
 def _parse_arguments() -> Namespace:

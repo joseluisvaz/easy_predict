@@ -95,7 +95,7 @@ def _create_h5_datasets(
 ) -> None:
     """Create a dataset in the h5 file for every field in the new data sample."""
     actor_data, roadgraph_data = new_data
-    
+
     actor_tensor = np.expand_dims(actor_data, axis=0)  # Add batch dimension
     actor_maxshape = (None, max_agents, *actor_tensor.shape[2:])
 
