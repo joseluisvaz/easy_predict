@@ -3,7 +3,7 @@ from collections import OrderedDict
 
 import tensorflow as tf
 
-_ROADGRAPH_SAMPLE_TYPE_MAP = {
+_ROADGRAPH_TYPE_TO_IDX = {
     "LaneCenter-Freeway": 1,
     "LaneCenter-SurfaceStreet": 2,
     "LaneCenter-BikeLane": 3,
@@ -23,9 +23,7 @@ _ROADGRAPH_SAMPLE_TYPE_MAP = {
 }
 
 # Use this map to map the int elements of the roadgraph maps to a sequence of contiguous ints.
-_ROADGRAPH_SAMPLE_TYPE_MAP_RESAMPLED = {
-    v: i for i, (_, v) in enumerate(_ROADGRAPH_SAMPLE_TYPE_MAP.items())
-}
+_ROADGRAPH_IDX_TO_TYPE = {idx: _type for _type, idx in _ROADGRAPH_TYPE_TO_IDX.items()}
 
 _TL_STATUS_MAP = {
     "Unknown": 0,

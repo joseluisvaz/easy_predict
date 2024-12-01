@@ -20,7 +20,7 @@ import lightning as L
 from lightning.pytorch.tuner import Tuner
 
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
-from models.multipath_based import MultiPathBased
+from models.prediction import PredictionModel 
 
 torch.set_float32_matmul_precision("medium")
 
@@ -119,8 +119,8 @@ class OnTrainCallback(L.Callback):
         plt.xlabel("x")
         plt.ylabel("y")
         plt.grid(True)
-        plt.xlim(-50, 50)
-        plt.ylim(-50, 50)
+        # plt.xlim(-50, 50)
+        # plt.ylim(-50, 50)
 
         # Save the plot to an in-memory buffer
         buf = io.BytesIO()
@@ -144,7 +144,8 @@ class LightningModule(L.LightningModule):
         self.fast_dev_run = fast_dev_run
         self.learning_rate = 0.01
         self.n_timesteps = 30
-        self.model = MultiPathBased(
+        self.batch_size = 32
+        self.model = PredictionModel(
             input_features=13, hidden_size=128, n_timesteps=self.n_timesteps
         )
 
@@ -176,7 +177,7 @@ class LightningModule(L.LightningModule):
     def train_dataloader(self):
         return DataLoader(
             self.dataset,
-            batch_size=32 if not self.fast_dev_run else 32,
+            batch_size=self.batch_size if not self.fast_dev_run else 8,
             num_workers=8 if not self.fast_dev_run else 1,
             shuffle=True,
             persistent_workers=True if not self.fast_dev_run else False,
@@ -189,7 +190,7 @@ class LightningModule(L.LightningModule):
     def val_dataloader(self):
         return DataLoader(
             self.dataset,
-            batch_size=32 if not self.fast_dev_run else 32,
+            batch_size=self.batch_size if not self.fast_dev_run else 8,
             num_workers=8 if not self.fast_dev_run else 1,
             shuffle=False,
             persistent_workers=True if not self.fast_dev_run else False,
@@ -216,13 +217,14 @@ def main(data_dir, fast_dev_run, use_gpu):
         callbacks=OnTrainCallback(dataset),
     )
 
-    tuner = Tuner(trainer)
-    lr_finder = tuner.lr_find(module)
+    if not fast_dev_run:
+        tuner = Tuner(trainer)
+        lr_finder = tuner.lr_find(module)
 
-    fig = lr_finder.plot(suggest=True)
-    fig.savefig("learning_rate.png")
-    new_lr = lr_finder.suggestion()
-    print("LEARNING RATE SUGGESTION: ", new_lr)
+        fig = lr_finder.plot(suggest=True)
+        fig.savefig("learning_rate.png")
+        new_lr = lr_finder.suggestion()
+        print("LEARNING RATE SUGGESTION: ", new_lr)
 
     trainer.fit(model=module)
 

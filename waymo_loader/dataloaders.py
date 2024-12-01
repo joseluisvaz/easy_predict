@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Generic, TypeVar 
+from typing import Any, Dict, List, Optional, Generic, TypeVar, Final
 from collections import OrderedDict
 
 import h5py
@@ -19,6 +19,7 @@ from common_utils.tensor_utils import force_pad_batch_size
 from waymo_loader.feature_description import (
     STATE_FEATURES,
     ROADGRAPH_FEATURES,
+    _ROADGRAPH_TYPE_TO_IDX
 )
 
 # Define generic type for arrays so that we can inspect when our features
@@ -27,6 +28,7 @@ Array = TypeVar("Array", np.ndarray, Tensor)
 
 MAX_NUM_AGENTS = 8
 MAX_POLYLINE_LENGTH = 100
+
 
 @dataclass
 class MultiAgentFeatures(Generic[Array]):
@@ -234,36 +236,124 @@ class WaymoDatasetHelper(object):
         )
 
 
+ROADGRAPH_TYPES_OF_INTEREST: Final = {
+    "LaneCenter-Freeway",
+    "LaneCenter-SurfaceStreet",
+    "LaneCenter-BikeLane",
+    "RoadEdgeBoundary",
+    "RoadEdgeMedian",
+    "StopSign",
+    "Crosswalk",
+    "SpeedBump",
+}
+
+def get_bounding_box(polyline: np.ndarray) -> np.ndarray:
+    """returns xmax, ymax, xmin, ymin of a polyline"""
+    max_vals = np.max(polyline, axis=0)
+    min_vals = np.min(polyline, axis=0)
+    return np.concatenate([max_vals, min_vals], axis=1)
+    
+def get_bounds_from_points(xy_positions: np.ndarray, padding: float) -> np.ndarray:
+    """ Gets the bounding box of that encloses all the points, (not the smallest one).
+        Bounding box described by lower left and upper right corner
+    Args:
+        xy_positions: xy positions
+        padding: padding to add in max and min of the bounding box
+    Returns:
+        lower left and upper right corners
+    """
+    assert xy_positions.ndim == 2, xy_positions.shape[1] == 2
+    lower_left_approximation = np.min(xy_positions, axis=0) - padding
+    upper_right_approximation = np.max(xy_positions, axis=0) + padding
+    return np.stack([lower_left_approximation, upper_right_approximation], axis=0)
 
 
-def _parse_roadgraph_features(decoded_example: Dict[str, np.ndarray], to_ego_se3: np.ndarray) -> Dict[str, torch.Tensor]:
-    # get only the rotation component to transform the polyline directions 
-    # rotation = get_so2_from_se2(to_ego_se3)  
+def get_inside_bounds_mask(xy_positions: np.ndarray, bounds: np.ndarray) -> np.ndarray:
+    """Gets elements within bounds.
+    Args:
+        xy_positions (np.ndarray): XY of the center
+        bounds (np.ndarray): array of shape Nx2x2 [[x_min,y_min],[x_max, y_max]]
+    Returns:
+        np.ndarray: mask of elements inside bound
+    """
+    assert xy_positions.ndim == 2 and xy_positions.shape[1] == 2
+    assert bounds.ndim == 2 and bounds.shape == (2, 2)
+
+    x_center = xy_positions[:, 0]
+    y_center = xy_positions[:, 1]
+
+    x_min_in = x_center > bounds[0, 0]
+    y_min_in = y_center > bounds[0, 1]
+    x_max_in = x_center < bounds[1, 0]
+    y_max_in = y_center < bounds[1, 1]
+    return x_min_in & y_min_in & x_max_in & y_max_in
+
+_MIN_NUM_OF_POINTS_IN_ROADGRAPH: Final = 100
+_BOUNDS_PADDING_M: Final = 10.0
+
+def _filter_inside_relevant_area(
+    map_positions: np.ndarray, agent_positions: np.ndarray 
+) -> Dict[str, np.ndarray]:
+    """Filter data inside relevant area, returns a mask"""
+    # If the map is already small then just return a valid mask
+    if len(map_positions) <= _MIN_NUM_OF_POINTS_IN_ROADGRAPH:
+        return np.ones_like(map_positions[..., 0]).astype(np.bool_)
+    # Increase padding until we find minimum number of points
+    current_padding_m = _BOUNDS_PADDING_M
+    while True:
+        bounds = get_bounds_from_points(agent_positions, current_padding_m)
+        inside_bounds_mask = get_inside_bounds_mask(map_positions, bounds)
+        n_inside_mask = np.sum(inside_bounds_mask)
+        
+        if n_inside_mask > _MIN_NUM_OF_POINTS_IN_ROADGRAPH:
+            break
+        current_padding_m += 10.0
+    return inside_bounds_mask
+
+
+def _parse_roadgraph_features(
+    decoded_example: Dict[str, np.ndarray], to_ego_se3: np.ndarray, valid_positions: np.ndarray
+) -> Dict[str, torch.Tensor]:
+    # get only the rotation component to transform the polyline directions
+    # rotation = get_so2_from_se2(to_ego_se3)
     points = transform_points(decoded_example["roadgraph_samples/xyz"][:, :2], to_ego_se3)
-
+    
     ids = decoded_example["roadgraph_samples/id"][:, 0]
     valid = decoded_example["roadgraph_samples/valid"][:, 0].astype(np.bool_)
+    types = decoded_example["roadgraph_samples/type"][:, 0].astype(np.int64)
     
-    valid_points = points[valid]
-    valid_ids = ids[valid].astype(np.int32)
+    idx_of_iterest = [_ROADGRAPH_TYPE_TO_IDX[type] for type in ROADGRAPH_TYPES_OF_INTEREST]
+
+    points = points[valid]  # [M, 2]
+    ids = ids[valid].astype(np.int32) # [M,]
+    mask_types = np.isin(types[valid], list(idx_of_iterest)) # [M,]
+     
+    map_mask = _filter_inside_relevant_area(points, valid_positions)
+    total_mask = mask_types & map_mask
+    
+    valid_points = points[total_mask]
+    valid_ids = ids[total_mask]
 
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
-    
+
     # Chop the polylines into smaller pieces to have minimum length
     chopped_polylines = []
     for id in unique_ids:
         polyline = valid_points[valid_ids == id]
         for i in range(0, len(polyline), MAX_POLYLINE_LENGTH):
             chopped_polylines.append(polyline[i : i + MAX_POLYLINE_LENGTH])
-
+        
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
-    
+
     nested_tensor = torch.nested.nested_tensor(chopped_polylines, dtype=torch.float)
     padded_tensor = torch.nested.to_padded_tensor(nested_tensor, padding=0.0)
 
     nested_masks = torch.nested.nested_tensor(masks, dtype=torch.bool)
     padded_tensor_mask = torch.nested.to_padded_tensor(nested_masks, padding=False)
-    return {"roadgraph_features": padded_tensor.numpy(), "roadgraph_features_mask": padded_tensor_mask.numpy()}
+    return {
+        "roadgraph_features": padded_tensor.numpy(),
+        "roadgraph_features_mask": padded_tensor_mask.numpy(),
+    }
 
 
 def _generate_features(
@@ -274,24 +364,29 @@ def _generate_features(
     is_sdc_mask = (decoded_example["state/is_sdc"].squeeze() > 0).astype(np.bool_)
     tracks_to_predict = np.logical_or(tracks_to_predict, is_sdc_mask)
 
-    multi_agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
-    multi_agent_features.crop_to_desired_prediction_horizon(future_num_frames)
+    agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
+    agent_features.crop_to_desired_prediction_horizon(future_num_frames)
     # Now remove the unwanted agents by filtering with tracks to predict
-    multi_agent_features.filter_with_mask(tracks_to_predict)
+    agent_features.filter_with_mask(tracks_to_predict)
 
     # Transform the scene to have the ego vehicle at the origin
-    ego_idx = np.argmax(multi_agent_features.is_sdc.squeeze())
+    ego_idx = np.argmax(agent_features.is_sdc.squeeze())
     to_sdc_se3 = get_transformation_matrix(
-        multi_agent_features.centroid[ego_idx],
-        multi_agent_features.yaw[ego_idx],
+        agent_features.centroid[ego_idx],
+        agent_features.yaw[ego_idx],
     )
-    multi_agent_features.transform_with_se3(to_sdc_se3)
-    map_features = _parse_roadgraph_features(decoded_example, to_sdc_se3)
+    agent_features.transform_with_se3(to_sdc_se3)
+    
+    valid_history_positions = agent_features.history_positions[agent_features.history_availabilities]
+    valid_target_positions = agent_features.target_positions[agent_features.target_availabilities]
+    valid_positions = np.concatenate((valid_history_positions, valid_target_positions), axis=0)
+
+    map_features = _parse_roadgraph_features(decoded_example, to_sdc_se3, valid_positions)
 
     # Now pad the remaining agents to the max number of agents, needed to have tensors the same size.
     # We also add 1 to the max number of agents to account for the ego vehicle
-    multi_agent_features.force_pad_batch_size(max_n_agents + 1)
-    return multi_agent_features.__dict__, map_features 
+    agent_features.force_pad_batch_size(max_n_agents + 1)
+    return agent_features.__dict__, map_features
 
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
@@ -361,4 +456,3 @@ class WaymoH5Dataset(Dataset):
     def __del__(self):
         if self.dataset is not None:
             self.dataset.close()
-
