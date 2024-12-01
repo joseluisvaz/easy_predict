@@ -21,9 +21,10 @@ from lightning.pytorch.tuner import Tuner
 
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
 from models.prediction import PredictionModel 
+from waymo_loader.feature_description import _ROADGRAPH_IDX_TO_TYPE, _ROADGRAPH_TYPE_TO_COLOR
 
+plt.style.use('dark_background')
 torch.set_float32_matmul_precision("medium")
-
 
 def compute_loss(predicted_positions, target_positions, target_availabilities):
     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
@@ -101,13 +102,24 @@ class OnTrainCallback(L.Callback):
         map_avails = torch.nested.to_padded_tensor(
             single_sample["roadgraph_features_mask"], padding=False
         ).cpu()
+        map_types = torch.nested.to_padded_tensor(
+            single_sample["roadgraph_features_types"], padding=False
+        ).cpu()
 
         map_features = map_features.view(-1, 2)
         map_avails = map_avails.view(-1, 1)
-        map_points = map_features[map_avails[:, 0]]
-
+        map_points = map_features[map_avails[:, 0]] # [N, 2]
+        map_types = map_types.view(-1)[map_avails[:, 0]].to(torch.int32) # [N,]
+        
         plt.figure()
-        plt.scatter(map_points[:, 0], map_points[:, 1], s=0.05, c="gray")
+
+        unique_type_id = torch.unique(map_types)
+        for type_id in unique_type_id:
+            filtered_points = map_points[map_types == type_id]
+            color = _ROADGRAPH_TYPE_TO_COLOR[_ROADGRAPH_IDX_TO_TYPE[type_id.item()]] 
+            plt.scatter(filtered_points[:, 0], filtered_points[:, 1], s=0.2, c=color)
+
+        # plt.scatter(map_points[:, 0], map_points[:, 1], s=0.05, c="gray")
         for sequence in past_sequences:
             plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="gray")
         for sequence in ground_truth_sequences:
@@ -118,13 +130,12 @@ class OnTrainCallback(L.Callback):
         plt.title("predictions")
         plt.xlabel("x")
         plt.ylabel("y")
-        plt.grid(True)
-        # plt.xlim(-50, 50)
-        # plt.ylim(-50, 50)
+        plt.xlim(-50, 50)
+        plt.ylim(-50, 50)
 
         # Save the plot to an in-memory buffer
         buf = io.BytesIO()
-        plt.savefig(buf, format="png")
+        plt.savefig(buf, format="png", dpi=300)
         plt.close()
         buf.seek(0)
 
@@ -142,7 +153,7 @@ class LightningModule(L.LightningModule):
         super().__init__()
         self.dataset = dataset
         self.fast_dev_run = fast_dev_run
-        self.learning_rate = 0.01
+        self.learning_rate = 0.002
         self.n_timesteps = 30
         self.batch_size = 32
         self.model = PredictionModel(

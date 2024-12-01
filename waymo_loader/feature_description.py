@@ -22,6 +22,26 @@ _ROADGRAPH_TYPE_TO_IDX = {
     "SpeedBump": 19,
 }
 
+_ROADGRAPH_TYPE_TO_COLOR = {
+    "LaneCenter-Freeway": "gray",
+    "LaneCenter-SurfaceStreet": "gray",
+    "LaneCenter-BikeLane": "gray",
+    "RoadLine-BrokenSingleWhite": "white",
+    "RoadLine-SolidSingleWhite": "white",
+    "RoadLine-SolidDoubleWhite": "white",
+    "RoadLine-BrokenSingleYellow": "yellow",
+    "RoadLine-BrokenDoubleYellow": "yellow",
+    "Roadline-SolidSingleYellow": "yellow",
+    "Roadline-SolidDoubleYellow": "yellow",
+    "RoadLine-PassingDoubleYellow": "yellow",
+    "RoadEdgeBoundary": "red",
+    "RoadEdgeMedian": "red",
+    "StopSign": "orange",
+    "Crosswalk": "orange",
+    "SpeedBump": "orange",
+}
+
+
 # Use this map to map the int elements of the roadgraph maps to a sequence of contiguous ints.
 _ROADGRAPH_IDX_TO_TYPE = {idx: _type for _type, idx in _ROADGRAPH_TYPE_TO_IDX.items()}
 

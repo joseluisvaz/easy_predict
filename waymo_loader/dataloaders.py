@@ -326,22 +326,27 @@ def _parse_roadgraph_features(
 
     points = points[valid]  # [M, 2]
     ids = ids[valid].astype(np.int32) # [M,]
-    mask_types = np.isin(types[valid], list(idx_of_iterest)) # [M,]
+    types = types[valid] # [M,]
+    mask_types = np.isin(types, list(idx_of_iterest)) # [M,]
      
     map_mask = _filter_inside_relevant_area(points, valid_positions)
     total_mask = mask_types & map_mask
     
     valid_points = points[total_mask]
     valid_ids = ids[total_mask]
+    valid_types = types[total_mask]
 
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
 
     # Chop the polylines into smaller pieces to have minimum length
     chopped_polylines = []
+    chopped_types = []
     for id in unique_ids:
         polyline = valid_points[valid_ids == id]
+        these_types = valid_types[valid_ids == id]
         for i in range(0, len(polyline), MAX_POLYLINE_LENGTH):
             chopped_polylines.append(polyline[i : i + MAX_POLYLINE_LENGTH])
+            chopped_types.append(these_types[i : i + MAX_POLYLINE_LENGTH])
         
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
 
@@ -350,9 +355,13 @@ def _parse_roadgraph_features(
 
     nested_masks = torch.nested.nested_tensor(masks, dtype=torch.bool)
     padded_tensor_mask = torch.nested.to_padded_tensor(nested_masks, padding=False)
+
+    nested_types = torch.nested.nested_tensor(chopped_types, dtype=torch.int16)
+    padded_tensor_types = torch.nested.to_padded_tensor(nested_types, padding=False)
     return {
         "roadgraph_features": padded_tensor.numpy(),
         "roadgraph_features_mask": padded_tensor_mask.numpy(),
+        "roadgraph_features_types": padded_tensor_types.numpy(),
     }
 
 
@@ -399,6 +408,9 @@ def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
     )
     batch["roadgraph_features_mask"] = torch.nested.nested_tensor(
         [value[1]["roadgraph_features_mask"] for value in payloads]
+    )
+    batch["roadgraph_features_types"] = torch.nested.nested_tensor(
+        [value[1]["roadgraph_features_types"] for value in payloads]
     )
     return default_convert(batch)
 
