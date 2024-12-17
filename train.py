@@ -20,11 +20,12 @@ import lightning as L
 from lightning.pytorch.tuner import Tuner
 
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
-from models.prediction import PredictionModel 
+from models.prediction import PredictionModel
 from waymo_loader.feature_description import _ROADGRAPH_IDX_TO_TYPE, _ROADGRAPH_TYPE_TO_COLOR
 
-plt.style.use('dark_background')
+plt.style.use("dark_background")
 torch.set_float32_matmul_precision("medium")
+
 
 def compute_loss(predicted_positions, target_positions, target_availabilities):
     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
@@ -105,27 +106,32 @@ class OnTrainCallback(L.Callback):
         map_types = torch.nested.to_padded_tensor(
             single_sample["roadgraph_features_types"], padding=False
         ).cpu()
+        map_ids = torch.nested.to_padded_tensor(
+            single_sample["roadgraph_features_ids"], padding=False
+        ).cpu()
 
         map_features = map_features.view(-1, 2)
-        map_avails = map_avails.view(-1, 1)
-        map_points = map_features[map_avails[:, 0]] # [N, 2]
-        map_types = map_types.view(-1)[map_avails[:, 0]].to(torch.int32) # [N,]
-        
+        map_avails = map_avails.view(-1, 1)[:, 0] # [N,]
+        map_points = map_features[map_avails]  # [N, 2]
+        map_types = map_types.view(-1)[map_avails].to(torch.int32)  # [N,]
+        map_ids = map_ids.view(-1)[map_avails].to(torch.int32)  # [N,]
+
         plt.figure()
 
-        unique_type_id = torch.unique(map_types)
-        for type_id in unique_type_id:
-            filtered_points = map_points[map_types == type_id]
-            color = _ROADGRAPH_TYPE_TO_COLOR[_ROADGRAPH_IDX_TO_TYPE[type_id.item()]] 
-            plt.scatter(filtered_points[:, 0], filtered_points[:, 1], s=0.2, c=color)
+        unique_polyline_ids = torch.unique(map_ids)
+        for polyline_id in unique_polyline_ids:
+            filtered_points = map_points[map_ids == polyline_id]
+            type_id = map_types[map_ids == polyline_id][0]
+            color = _ROADGRAPH_TYPE_TO_COLOR[_ROADGRAPH_IDX_TO_TYPE[type_id.item()]]
+            plt.plot(filtered_points[:, 0], filtered_points[:, 1], color=color, linewidth=0.5)
 
         # plt.scatter(map_points[:, 0], map_points[:, 1], s=0.05, c="gray")
         for sequence in past_sequences:
-            plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="gray")
+            plt.plot(sequence[:, 0], sequence[:, 1], color="gray", linewidth=5.0, alpha=0.7)
         for sequence in ground_truth_sequences:
-            plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="green")
+            plt.plot(sequence[:, 0], sequence[:, 1], color="teal", linewidth=5.0, alpha=0.7)
         for sequence in predicted_sequences:
-            plt.plot(sequence[:, 0], sequence[:, 1], "o-", color="red")
+            plt.plot(sequence[:, 0], sequence[:, 1], color="orange", linewidth=5.0, alpha=0.7)
 
         plt.title("predictions")
         plt.xlabel("x")
@@ -198,18 +204,18 @@ class LightningModule(L.LightningModule):
             collate_fn=collate_waymo,
         )
 
-    def val_dataloader(self):
-        return DataLoader(
-            self.dataset,
-            batch_size=self.batch_size if not self.fast_dev_run else 8,
-            num_workers=8 if not self.fast_dev_run else 1,
-            shuffle=False,
-            persistent_workers=True if not self.fast_dev_run else False,
-            pin_memory=False,
-            drop_last=True,
-            prefetch_factor=8 if not self.fast_dev_run else None,
-            collate_fn=collate_waymo,
-        )
+    # def val_dataloader(self):
+    #     return DataLoader(
+    #         self.dataset,
+    #         batch_size=self.batch_size if not self.fast_dev_run else 8,
+    #         num_workers=8 if not self.fast_dev_run else 1,
+    #         shuffle=False,
+    #         persistent_workers=True if not self.fast_dev_run else False,
+    #         pin_memory=False,
+    #         drop_last=True,
+    #         prefetch_factor=8 if not self.fast_dev_run else None,
+    #         collate_fn=collate_waymo,
+    #     )
 
 
 def main(data_dir, fast_dev_run, use_gpu):
@@ -228,7 +234,8 @@ def main(data_dir, fast_dev_run, use_gpu):
         callbacks=OnTrainCallback(dataset),
     )
 
-    if not fast_dev_run:
+    LR_FIND = False
+    if LR_FIND and not fast_dev_run:
         tuner = Tuner(trainer)
         lr_finder = tuner.lr_find(module)
 

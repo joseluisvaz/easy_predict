@@ -9,56 +9,16 @@ from models.rnn_cells import MultiAgentLSTMCell
 from models.multiheaded_attention import MultiheadAttention
 
 
-def seq_pooling(
-    x: Tensor, invalid: Tensor, mode: str, valid: T.Optional[Tensor] = None
-) -> Tensor:
-    """
+def seq_pooling(x: Tensor, invalid: Tensor) -> Tensor:
+    """Do max pooling over the sequence dimension.
     Args:
         x: [n_sc, n_ag, n_step, hidden_dim] or [n_sc, n_mp, n_mp_pl_node, hidden_dim]
         invalid: [n_sc, n_ag, n_step]
-        mode: one of {"max", "last", "max_valid", "last_valid", "mean_valid"}
-        valid: [n_sc, n_ag, n_step], ~invalid, just for efficiency
-
     Returns:
         x_pooled: [n_sc, n_ag, hidden_dim]
     """
-    if mode == "max_valid":
-        x_pooled = x.masked_fill(invalid.unsqueeze(-1), float("-inf")).amax(2)
-    elif mode == "first":
-        x_pooled = x[:, :, 0]
-    elif mode == "last":
-        x_pooled = x[:, :, -1]
-    elif mode == "last_valid":
-        n_sc, n_ag, n_step = invalid.shape
-        if valid is None:
-            valid = ~invalid
-        idx_last_valid = n_step - 1 - torch.max(valid.flip(2), dim=2)[1]
-        x_pooled = x[
-            torch.arange(n_sc).unsqueeze(1), torch.arange(n_ag).unsqueeze(0), idx_last_valid
-        ]
-    elif mode == "mean_valid":
-        if valid is None:
-            valid = ~invalid
-        x_pooled = x.masked_fill(invalid.unsqueeze(-1), 0.0).sum(2)
-        x_pooled = x_pooled / (valid.sum(2, keepdim=True) + torch.finfo(x.dtype).eps)
-    else:
-        raise NotImplementedError
-
+    x_pooled = x.masked_fill(invalid.unsqueeze(-1), float("-inf")).amax(2)
     return x_pooled.masked_fill(invalid.all(-1, keepdim=True), 0)
-
-
-def _get_activation(activation: str, inplace: bool) -> nn.Module:
-    if activation == "relu":
-        return nn.ReLU(inplace=inplace)
-    elif activation == "gelu":
-        return nn.GELU()
-    elif activation == "leaky_relu":
-        return nn.LeakyReLU(inplace=inplace)
-    elif activation == "elu":
-        return nn.ELU(inplace=inplace)
-    elif activation == "rrelu":
-        return nn.RReLU(inplace=inplace)
-    raise RuntimeError("activation {} not implemented".format(activation))
 
 
 class MLP(nn.Module):
@@ -66,34 +26,20 @@ class MLP(nn.Module):
         self,
         fc_dims: T.Union[T.List, T.Tuple],
         dropout_p: float = -1.0,
-        activation: str = "relu",
         end_layer_activation: bool = True,
-        init_weight_norm: bool = False,
-        init_bias: T.Optional[float] = None,
         use_layernorm: bool = False,
-        use_batchnorm: bool = False,
     ) -> None:
         super().__init__()
         assert len(fc_dims) >= 2
-        assert not (use_layernorm and use_batchnorm)
+        
         layers: T.List[nn.Module] = []
         for i in range(0, len(fc_dims) - 1):
-            fc = nn.Linear(fc_dims[i], fc_dims[i + 1])
-
-            if init_weight_norm:
-                fc.weight.data *= 1.0 / fc.weight.norm(dim=1, p=2, keepdim=True)
-            if init_bias is not None and i == len(fc_dims) - 2:
-                fc.bias.data *= 0
-                fc.bias.data += init_bias
-
-            layers.append(fc)
+            layers.append(nn.Linear(fc_dims[i], fc_dims[i + 1]))
 
             if (i < len(fc_dims) - 2) or (i == len(fc_dims) - 2 and end_layer_activation):
                 if use_layernorm:
                     layers.append(nn.LayerNorm(fc_dims[i + 1]))
-                elif use_batchnorm:
-                    layers.append(nn.BatchNorm1d(fc_dims[i + 1]))
-                layers.append(_get_activation(activation, inplace=True))
+                layers.append(nn.ReLU(inplace=True))
 
             if dropout_p > 0:
                 layers.append(nn.Dropout(p=dropout_p))
@@ -128,11 +74,8 @@ class PolylineEncoder(nn.Module):
         n_layer: int = 3,
         mlp_use_layernorm: bool = False,
         mlp_dropout_p: float = 0.0,
-        pooling_mode: str = "max_valid",
     ) -> None:
         super().__init__()
-        self.pooling_mode = pooling_mode
-
         mlp_layers: T.List[nn.Module] = []
         for _ in range(n_layer):
             mlp_layers.append(
@@ -140,6 +83,7 @@ class PolylineEncoder(nn.Module):
                     [hidden_dim, hidden_dim // 2],
                     dropout_p=mlp_dropout_p,
                     use_layernorm=mlp_use_layernorm,
+                    end_layer_activation=True,
                 )
             )
         self.mlp_layers = nn.ModuleList(mlp_layers)
@@ -152,13 +96,13 @@ class PolylineEncoder(nn.Module):
         Returns:
             emb: [n_sc, n_mp, hidden_dim]
         """
-        n_sc, n_mp, n_mp_pl_node = invalid.shape
+        _, _, n_mp_pl_node = invalid.shape
 
         for mlp in self.mlp_layers:
             x = mlp(x, invalid, float("-inf"))
             x = torch.cat((x, x.amax(dim=2, keepdim=True).expand(-1, -1, n_mp_pl_node, -1)), dim=-1)
             x.masked_fill_(invalid.unsqueeze(-1), 0)
-        emb = seq_pooling(x, invalid, self.pooling_mode)
+        emb = seq_pooling(x, invalid)
         return emb
 
 
@@ -258,16 +202,15 @@ class PredictionModel(nn.Module):
         self.encoder = Encoder(input_features, hidden_size)
         self.mcg = MultiContextGating(hidden_size, n_contexts=self.NUM_MCG_LAYERS)
         self.decoder = Decoder(self.XY_OUTPUT_SIZE, hidden_size, self.XY_OUTPUT_SIZE, n_timesteps)
-        self.actor_interaction = MultiheadAttention(
-            in_feats=hidden_size, per_head_feats=16, n_heads=16, dropout_factor=0.0
-        )
+        # self.actor_interaction = MultiheadAttention(
+        #     in_feats=hidden_size, per_head_feats=16, n_heads=16, dropout_factor=0.0
+        # )
         # self.map_encoder = MapPointNet(2, 64, 128)
 
         self.mlp1 = nn.Linear(2, 128)
-        self.polyline_encoder = PolylineEncoder(128, n_layer=3, pooling_mode="max_valid", mlp_dropout_p=0.0)
-        self.polyline_interaction = MultiheadAttention(
-            in_feats=128, per_head_feats=16, n_heads=16, dropout_factor=0.0
-        )
+        self.polyline_encoder = PolylineEncoder(128, n_layer=3, mlp_dropout_p=0.0)
+        self.polyline_interaction = nn.MultiheadAttention(embed_dim=128, num_heads=8, dropout=0.0, batch_first=True)
+        self.actor_interaction = nn.MultiheadAttention(embed_dim=128, num_heads=8, dropout=0.0, batch_first=True)
 
     def forward(self, inputs: T.Dict[str, torch.Tensor]):
 
@@ -278,25 +221,21 @@ class PredictionModel(nn.Module):
         map_feats = torch.nested.to_padded_tensor(inputs["roadgraph_features"], padding=0.0)
         map_avails = torch.nested.to_padded_tensor(
             inputs["roadgraph_features_mask"], padding=False
-        ).bool()
+        ).bool()[..., 0]
 
         polyline_avails = torch.any(map_avails, dim=2)
-        invalid = ~map_avails[..., 0]
+        map_invalid = ~map_avails
+        pl_invalid = ~polyline_avails
 
         x_map = self.mlp1(map_feats)
-        polyline_hidden = self.polyline_encoder(x_map, invalid)
-
-        # polyline_hidden, polyline_avails = self.map_encoder(map_feats, map_avails)
+        pl_hidden = self.polyline_encoder(x_map, map_invalid)
 
         hidden, context = self.encoder(history_features, history_availabilities)
         current_positions = history_features[:, :, -1, :2]  # For now only takes positions
         current_availabilities = history_availabilities[:, :, -1]
 
-        hidden, _ = self.polyline_interaction(
-            hidden, polyline_hidden, polyline_hidden, mask=polyline_avails
-        )
-
-        hidden, _ = self.actor_interaction(hidden, hidden, hidden, mask=current_availabilities)
+        pl_actor_hidden, _ = self.polyline_interaction(hidden, pl_hidden, pl_hidden, key_padding_mask=pl_invalid)
+        hidden, _ = self.actor_interaction(hidden, pl_actor_hidden, pl_actor_hidden, key_padding_mask=~current_availabilities)
 
         output = self.decoder(current_positions, current_availabilities, hidden, context)
         return output

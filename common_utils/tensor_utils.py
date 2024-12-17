@@ -38,7 +38,7 @@ def force_pad_batch_size(tensor: Array, max_batch_size: int) -> Array:
         raise TypeError("valid tensor types: torch.tensor | np.ndarray")
 
 def flatten_agent_dim(_input: Tensor) -> Tensor:
-    return _input.view(_input.size(0) * _input.size(1), *_input.shape[2:])
+    return _input.reshape(_input.size(0) * _input.size(1), *_input.shape[2:])
 
 def expand_agent_dim(_input: Tensor, n_batch: int, n_agents: int) -> Tensor:
     assert n_batch * n_agents == _input.size(0)

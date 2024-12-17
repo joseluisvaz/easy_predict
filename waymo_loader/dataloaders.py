@@ -236,10 +236,29 @@ class WaymoDatasetHelper(object):
         )
 
 
+# ROADGRAPH_TYPES_OF_INTEREST: Final = {
+#     "LaneCenter-Freeway",
+#     "LaneCenter-SurfaceStreet",
+#     "LaneCenter-BikeLane",
+#     "RoadEdgeBoundary",
+#     "RoadEdgeMedian",
+#     "StopSign",
+#     "Crosswalk",
+#     "SpeedBump",
+# }
+
 ROADGRAPH_TYPES_OF_INTEREST: Final = {
     "LaneCenter-Freeway",
     "LaneCenter-SurfaceStreet",
     "LaneCenter-BikeLane",
+    "RoadLine-BrokenSingleWhite",
+    "RoadLine-SolidSingleWhite",
+    "RoadLine-SolidDoubleWhite",
+    "RoadLine-BrokenSingleYellow",
+    "RoadLine-BrokenDoubleYellow",
+    "Roadline-SolidSingleYellow",
+    "Roadline-SolidDoubleYellow",
+    "RoadLine-PassingDoubleYellow",
     "RoadEdgeBoundary",
     "RoadEdgeMedian",
     "StopSign",
@@ -323,6 +342,7 @@ def _parse_roadgraph_features(
     types = decoded_example["roadgraph_samples/type"][:, 0].astype(np.int64)
     
     idx_of_iterest = [_ROADGRAPH_TYPE_TO_IDX[type] for type in ROADGRAPH_TYPES_OF_INTEREST]
+    # idx_of_iterest = [_type for _type in _ROADGRAPH_TYPE_TO_IDX.keys()]
 
     points = points[valid]  # [M, 2]
     ids = ids[valid].astype(np.int32) # [M,]
@@ -341,12 +361,15 @@ def _parse_roadgraph_features(
     # Chop the polylines into smaller pieces to have minimum length
     chopped_polylines = []
     chopped_types = []
+    chopped_ids = []
     for id in unique_ids:
         polyline = valid_points[valid_ids == id]
         these_types = valid_types[valid_ids == id]
+        these_ids = valid_ids[valid_ids == id]
         for i in range(0, len(polyline), MAX_POLYLINE_LENGTH):
             chopped_polylines.append(polyline[i : i + MAX_POLYLINE_LENGTH])
             chopped_types.append(these_types[i : i + MAX_POLYLINE_LENGTH])
+            chopped_ids.append(these_ids[i : i + MAX_POLYLINE_LENGTH])
         
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
 
@@ -358,10 +381,14 @@ def _parse_roadgraph_features(
 
     nested_types = torch.nested.nested_tensor(chopped_types, dtype=torch.int16)
     padded_tensor_types = torch.nested.to_padded_tensor(nested_types, padding=False)
+
+    nested_ids = torch.nested.nested_tensor(chopped_ids, dtype=torch.int16)
+    padded_tensor_ids = torch.nested.to_padded_tensor(nested_ids, padding=False)
     return {
         "roadgraph_features": padded_tensor.numpy(),
         "roadgraph_features_mask": padded_tensor_mask.numpy(),
         "roadgraph_features_types": padded_tensor_types.numpy(),
+        "roadgraph_features_ids": padded_tensor_ids.numpy(),
     }
 
 
@@ -411,6 +438,9 @@ def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
     )
     batch["roadgraph_features_types"] = torch.nested.nested_tensor(
         [value[1]["roadgraph_features_types"] for value in payloads]
+    )
+    batch["roadgraph_features_ids"] = torch.nested.nested_tensor(
+        [value[1]["roadgraph_features_ids"] for value in payloads]
     )
     return default_convert(batch)
 
