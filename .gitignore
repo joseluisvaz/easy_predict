@@ -8,3 +8,5 @@ trajdata/
 __pycache__/
 
 lightning_logs/
+
+checkpoints/*

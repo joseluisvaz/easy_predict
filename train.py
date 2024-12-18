@@ -20,7 +20,7 @@ from lightning.pytorch.tuner import Tuner
 from metrics import MotionMetrics, _default_metrics_config
 from metrics_callback import OnTrainCallback
 from torch import Tensor
-
+from lightning.pytorch.callbacks import ModelCheckpoint
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
 from models.prediction import PredictionModel
 from waymo_loader.feature_description import (
@@ -42,19 +42,19 @@ task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPred
 
 
 class LightningModule(L.LightningModule):
-    def __init__(
-        self, data_dir: str, fast_dev_run: bool, hyperparameters: Dict[str, Any] 
-    ):
+    def __init__(self, data_dir: str, fast_dev_run: bool, hyperparameters: Dict[str, Any]):
         super().__init__()
         self.save_hyperparameters()
         self.task = task
         self.data_dir = data_dir
         self.fast_dev_run = fast_dev_run
-        self.learning_rate = hyperparameters["learning_rate"] 
+        self.learning_rate = hyperparameters["learning_rate"]
         self.n_timesteps = 80
         self.batch_size = hyperparameters["batch_size"]
         self.model = PredictionModel(
-            input_features=12, hidden_size=hyperparameters["hidden_size"], n_timesteps=self.n_timesteps
+            input_features=12,
+            hidden_size=hyperparameters["hidden_size"],
+            n_timesteps=self.n_timesteps,
         )
 
         self.metrics_config = _default_metrics_config()
@@ -181,13 +181,23 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: Optional[s
         )
     )
 
+    checkpoint_callback = ModelCheckpoint(
+        dirpath="checkpoints/",
+        filename="model-{epoch:02d}-{loss/train:.2f}",
+        monitor="loss/train",
+        mode="min",
+        save_top_k=1,
+        verbose=True,
+    )
+    metrics_callback = OnTrainCallback(data_dir)
+
     trainer = L.Trainer(
         max_epochs=10,
         accelerator="gpu" if use_gpu else "cpu",
         devices=1,
         fast_dev_run=fast_dev_run,
         # precision="16-mixed",
-        callbacks=OnTrainCallback(data_dir),
+        callbacks=[metrics_callback, checkpoint_callback],
     )
 
     LR_FIND = False

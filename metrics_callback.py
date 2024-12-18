@@ -118,7 +118,7 @@ class OnTrainCallback(L.Callback):
             single_sample["roadgraph_features_ids"], padding=False
         ).cpu()
 
-        map_features = map_features.view(-1, 2)
+        map_features = map_features[..., :2].view(-1, 2)
         map_avails = map_avails.view(-1, 1)[:, 0]  # [N,]
         map_points = map_features[map_avails]  # [N, 2]
         map_types = map_types.view(-1)[map_avails].to(torch.int32)  # [N,]

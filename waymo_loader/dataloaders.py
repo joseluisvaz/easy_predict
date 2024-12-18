@@ -243,9 +243,10 @@ def _parse_roadgraph_features(
     decoded_example: Dict[str, np.ndarray], to_ego_se3: np.ndarray, valid_positions: np.ndarray
 ) -> Dict[str, torch.Tensor]:
 
-    def _apply_validity_masks(points, valid, types, ids):
+    def _apply_validity_masks(points, dirs, valid, types, ids):
         """Filter the roadgraph based on validity and type of the roadgraph element"""
         points = points[valid]  # [M, 2]
+        dirs = dirs[valid]  # [M, 2]
         ids = ids[valid].astype(np.int32)  # [M,]
         types = types[valid]  # [M,]
 
@@ -255,18 +256,20 @@ def _parse_roadgraph_features(
         total_mask = mask_types & map_mask
 
         valid_points = points[total_mask]
+        valid_dirs = dirs[total_mask]
         valid_ids = ids[total_mask]
         valid_types = types[total_mask]
-        return valid_points, valid_ids, valid_types
+        return valid_points, valid_dirs,valid_ids, valid_types
 
     # get only the rotation component to transform the polyline directions
-    # rotation = get_so2_from_se2(to_ego_se3)
+    rotation = get_so2_from_se2(to_ego_se3)
     points = transform_points(decoded_example["roadgraph_samples/xyz"][:, :2], to_ego_se3)
+    dirs = transform_points(decoded_example["roadgraph_samples/dir"][:, :2], rotation)
     ids = decoded_example["roadgraph_samples/id"][:, 0]
     valid = decoded_example["roadgraph_samples/valid"][:, 0].astype(np.bool_)
     types = decoded_example["roadgraph_samples/type"][:, 0].astype(np.int64)
 
-    valid_points, valid_ids, valid_types = _apply_validity_masks(points, valid, types, ids)
+    valid_points, valid_dirs, valid_ids, valid_types = _apply_validity_masks(points, dirs, valid, types, ids)
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
 
     def _subsample_sequence(sequence: np.ndarray, subsample: int):
@@ -295,6 +298,7 @@ def _parse_roadgraph_features(
         return decomposed
 
     chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
+    chopped_dirs = _select_and_decompose_sequences(valid_dirs, valid_types)
     chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
     chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
@@ -302,9 +306,13 @@ def _parse_roadgraph_features(
     def _nest_and_pad(tensor: np.ndarray, torch_type: Any, padding: Any) -> np.ndarray:
         nested_tensor = torch.nested.nested_tensor(tensor, dtype=torch_type)
         return torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
+        
+    chopped_polylines = _nest_and_pad(chopped_polylines, torch.float, 0.0)
+    chopped_dirs = _nest_and_pad(chopped_dirs, torch.float, 0.0)
+    features = np.concatenate((chopped_polylines, chopped_dirs), axis=-1)
 
     return {
-        "roadgraph_features": _nest_and_pad(chopped_polylines, torch.float, 0.0),
+        "roadgraph_features": features,
         "roadgraph_features_mask": _nest_and_pad(masks, torch.bool, False),
         "roadgraph_features_types": _nest_and_pad(chopped_types, torch.int16, False),
         "roadgraph_features_ids": _nest_and_pad(chopped_ids, torch.int16, False),

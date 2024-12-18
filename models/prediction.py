@@ -200,7 +200,7 @@ class PredictionModel(nn.Module):
         self.decoder = Decoder(self.XY_OUTPUT_SIZE, hidden_size, self.XY_OUTPUT_SIZE, n_timesteps)
 
         # Map parameters
-        self.mlp1 = nn.Linear(2, 128)
+        self.polyline_adapter = nn.Linear(4, 128)
         self.polyline_encoder = PolylineEncoder(128, n_layer=3, mlp_dropout_p=0.0)
 
         # Attention mechanisms
@@ -233,7 +233,7 @@ class PredictionModel(nn.Module):
         pl_invalid = ~polyline_avails
 
         # Encode map
-        x_map = self.mlp1(map_feats)
+        x_map = self.polyline_adapter(map_feats)
         hidden_polyline = self.polyline_encoder(x_map, map_invalid)
 
         # Encode actors
