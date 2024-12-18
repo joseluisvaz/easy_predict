@@ -27,7 +27,6 @@ from waymo_loader.feature_description import (
 Array = TypeVar("Array", np.ndarray, Tensor)
 
 MAX_NUM_AGENTS = 8
-MAX_POLYLINE_LENGTH = 100
 
 
 @dataclass
@@ -266,6 +265,25 @@ ROADGRAPH_TYPES_OF_INTEREST: Final = {
     "SpeedBump",
 }
 
+ROADGRAPH_TYPES_TO_SUBSAMPLE = [
+    "LaneCenter-Freeway",
+    "LaneCenter-SurfaceStreet",
+    "LaneCenter-BikeLane",
+    "RoadLine-BrokenSingleWhite",
+    "RoadLine-SolidSingleWhite",
+    "RoadLine-SolidDoubleWhite",
+    "RoadLine-BrokenSingleYellow",
+    "RoadLine-BrokenDoubleYellow",
+    "Roadline-SolidSingleYellow",
+    "Roadline-SolidDoubleYellow",
+    "RoadLine-PassingDoubleYellow",
+    "RoadEdgeBoundary",
+    "RoadEdgeMedian"
+]
+
+
+
+
 def get_bounding_box(polyline: np.ndarray) -> np.ndarray:
     """returns xmax, ymax, xmin, ymin of a polyline"""
     max_vals = np.max(polyline, axis=0)
@@ -333,62 +351,71 @@ def _filter_inside_relevant_area(
 def _parse_roadgraph_features(
     decoded_example: Dict[str, np.ndarray], to_ego_se3: np.ndarray, valid_positions: np.ndarray
 ) -> Dict[str, torch.Tensor]:
+    
+    def _apply_validity_masks(points, valid, types, ids):
+        """Filter the roadgraph based on validity and type of the roadgraph element"""
+        points = points[valid]  # [M, 2]
+        ids = ids[valid].astype(np.int32) # [M,]
+        types = types[valid] # [M,]
+        
+        idx_of_iterest = [_ROADGRAPH_TYPE_TO_IDX[type] for type in ROADGRAPH_TYPES_OF_INTEREST]
+        mask_types = np.isin(types, list(idx_of_iterest)) # [M,]
+        map_mask = _filter_inside_relevant_area(points, valid_positions)
+        total_mask = mask_types & map_mask
+
+        valid_points = points[total_mask]
+        valid_ids = ids[total_mask]
+        valid_types = types[total_mask]
+        return valid_points, valid_ids, valid_types
+        
     # get only the rotation component to transform the polyline directions
     # rotation = get_so2_from_se2(to_ego_se3)
     points = transform_points(decoded_example["roadgraph_samples/xyz"][:, :2], to_ego_se3)
-    
     ids = decoded_example["roadgraph_samples/id"][:, 0]
     valid = decoded_example["roadgraph_samples/valid"][:, 0].astype(np.bool_)
     types = decoded_example["roadgraph_samples/type"][:, 0].astype(np.int64)
-    
-    idx_of_iterest = [_ROADGRAPH_TYPE_TO_IDX[type] for type in ROADGRAPH_TYPES_OF_INTEREST]
-    # idx_of_iterest = [_type for _type in _ROADGRAPH_TYPE_TO_IDX.keys()]
 
-    points = points[valid]  # [M, 2]
-    ids = ids[valid].astype(np.int32) # [M,]
-    types = types[valid] # [M,]
-    mask_types = np.isin(types, list(idx_of_iterest)) # [M,]
-     
-    map_mask = _filter_inside_relevant_area(points, valid_positions)
-    total_mask = mask_types & map_mask
-    
-    valid_points = points[total_mask]
-    valid_ids = ids[total_mask]
-    valid_types = types[total_mask]
-
+    valid_points, valid_ids, valid_types = _apply_validity_masks(points, valid, types, ids)
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
-
-    # Chop the polylines into smaller pieces to have minimum length
-    chopped_polylines = []
-    chopped_types = []
-    chopped_ids = []
-    for id in unique_ids:
-        polyline = valid_points[valid_ids == id]
-        these_types = valid_types[valid_ids == id]
-        these_ids = valid_ids[valid_ids == id]
-        for i in range(0, len(polyline), MAX_POLYLINE_LENGTH):
-            chopped_polylines.append(polyline[i : i + MAX_POLYLINE_LENGTH])
-            chopped_types.append(these_types[i : i + MAX_POLYLINE_LENGTH])
-            chopped_ids.append(these_ids[i : i + MAX_POLYLINE_LENGTH])
+     
+    def _subsample_sequence(sequence: np.ndarray, subsample: int):
+        if len(sequence) <= 3:
+            return sequence
+        indices = np.arange(1, len(sequence) - 1, subsample)
+        indices = np.concatenate(([0], indices, [len(sequence) - 1]))
+        return sequence[indices]
         
+    SUBSAMPLE: T.Final = 4
+    MAX_POLYLINE_LENGTH: T.Final = 20
+    ROADGRAPH_IDX_TO_SUBSAMPLE = {
+        _ROADGRAPH_TYPE_TO_IDX[_type] for _type in ROADGRAPH_TYPES_TO_SUBSAMPLE
+    }
+    def _select_and_decompose_sequences(flattened_sequences: np.ndarray, types: np.ndarray):
+        """Select the unique ids and decompose the polylines into smaller pieces"""
+        decomposed = []
+        for id in unique_ids:
+            indices = valid_ids == id
+            polyline_type = types[indices][0] # Get the type of this polyline 
+            subsample_factor = SUBSAMPLE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
+            subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
+            for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
+                decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
+        return decomposed
+    
+    chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
+    chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
+    chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
+    
+    def _nest_and_pad(tensor: np.ndarray, torch_type: Any, padding: Any) -> np.ndarray:
+        nested_tensor = torch.nested.nested_tensor(tensor, dtype=torch_type)
+        return torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
 
-    nested_tensor = torch.nested.nested_tensor(chopped_polylines, dtype=torch.float)
-    padded_tensor = torch.nested.to_padded_tensor(nested_tensor, padding=0.0)
-
-    nested_masks = torch.nested.nested_tensor(masks, dtype=torch.bool)
-    padded_tensor_mask = torch.nested.to_padded_tensor(nested_masks, padding=False)
-
-    nested_types = torch.nested.nested_tensor(chopped_types, dtype=torch.int16)
-    padded_tensor_types = torch.nested.to_padded_tensor(nested_types, padding=False)
-
-    nested_ids = torch.nested.nested_tensor(chopped_ids, dtype=torch.int16)
-    padded_tensor_ids = torch.nested.to_padded_tensor(nested_ids, padding=False)
     return {
-        "roadgraph_features": padded_tensor.numpy(),
-        "roadgraph_features_mask": padded_tensor_mask.numpy(),
-        "roadgraph_features_types": padded_tensor_types.numpy(),
-        "roadgraph_features_ids": padded_tensor_ids.numpy(),
+        "roadgraph_features": _nest_and_pad(chopped_polylines, torch.float, 0.0),
+        "roadgraph_features_mask": _nest_and_pad(masks, torch.bool, False),
+        "roadgraph_features_types": _nest_and_pad(chopped_types, torch.int16, False),
+        "roadgraph_features_ids": _nest_and_pad(chopped_ids, torch.int16, False),
     }
 
 

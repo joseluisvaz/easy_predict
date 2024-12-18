@@ -200,15 +200,13 @@ class PredictionModel(nn.Module):
     def __init__(self, input_features, hidden_size, n_timesteps):
         super(PredictionModel, self).__init__()
         self.encoder = Encoder(input_features, hidden_size)
-        self.mcg = MultiContextGating(hidden_size, n_contexts=self.NUM_MCG_LAYERS)
         self.decoder = Decoder(self.XY_OUTPUT_SIZE, hidden_size, self.XY_OUTPUT_SIZE, n_timesteps)
-        # self.actor_interaction = MultiheadAttention(
-        #     in_feats=hidden_size, per_head_feats=16, n_heads=16, dropout_factor=0.0
-        # )
-        # self.map_encoder = MapPointNet(2, 64, 128)
 
+        # Map parameters
         self.mlp1 = nn.Linear(2, 128)
         self.polyline_encoder = PolylineEncoder(128, n_layer=3, mlp_dropout_p=0.0)
+    
+        # Attention mechanisms
         self.polyline_interaction = nn.MultiheadAttention(embed_dim=128, num_heads=8, dropout=0.0, batch_first=True)
         self.actor_interaction = nn.MultiheadAttention(embed_dim=128, num_heads=8, dropout=0.0, batch_first=True)
 
@@ -228,14 +226,14 @@ class PredictionModel(nn.Module):
         pl_invalid = ~polyline_avails
 
         x_map = self.mlp1(map_feats)
-        pl_hidden = self.polyline_encoder(x_map, map_invalid)
+        hidden_polyline = self.polyline_encoder(x_map, map_invalid)
 
-        hidden, context = self.encoder(history_features, history_availabilities)
-        current_positions = history_features[:, :, -1, :2]  # For now only takes positions
+        hidden_actors, context_actors = self.encoder(history_features, history_availabilities)
+
+        attend_to_polyline, _ = self.polyline_interaction(hidden_actors, hidden_polyline, hidden_polyline, key_padding_mask=pl_invalid)
+        attend_to_actors, _ = self.actor_interaction(hidden_actors, attend_to_polyline, attend_to_polyline, key_padding_mask=~current_availabilities)
+
+        current_positions = history_features[:, :, -1, :2]  # For now decoder only takes positions
         current_availabilities = history_availabilities[:, :, -1]
-
-        pl_actor_hidden, _ = self.polyline_interaction(hidden, pl_hidden, pl_hidden, key_padding_mask=pl_invalid)
-        hidden, _ = self.actor_interaction(hidden, pl_actor_hidden, pl_actor_hidden, key_padding_mask=~current_availabilities)
-
-        output = self.decoder(current_positions, current_availabilities, hidden, context)
+        output = self.decoder(current_positions, current_availabilities, attend_to_actors, context_actors)
         return output

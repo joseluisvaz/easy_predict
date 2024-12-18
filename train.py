@@ -161,7 +161,7 @@ class LightningModule(L.LightningModule):
         self.fast_dev_run = fast_dev_run
         self.learning_rate = 0.002
         self.n_timesteps = 30
-        self.batch_size = 32
+        self.batch_size = 128
         self.model = PredictionModel(
             input_features=13, hidden_size=128, n_timesteps=self.n_timesteps
         )
@@ -173,7 +173,15 @@ class LightningModule(L.LightningModule):
         future_positions = batch["target_positions"][:, :, : self.n_timesteps]
         future_availabilities = batch["target_availabilities"][:, :, : self.n_timesteps]
         loss = compute_loss(predicted_positions, future_positions, future_availabilities)
-
+        
+        # Compute the percentarge of elements in the map that are available, this ia metric that tells us
+        # how empty the tensors are
+        map_avails = torch.nested.to_padded_tensor(
+            batch["roadgraph_features_mask"], padding=False
+        ).bool()[..., 0] # batch, polyline, points
+        
+        percentage = map_avails.sum().float() / map_avails.numel()
+        self.log("map_availability_percentage", percentage)
         self.log("loss/train", loss)
         return loss
 
