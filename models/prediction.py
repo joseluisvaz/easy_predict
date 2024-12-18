@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from models.multi_context_gating import MultiContextGating
 from models.rnn_cells import MultiAgentLSTMCell
 from models.multiheaded_attention import MultiheadAttention
+from waymo_loader.feature_description import NUM_HISTORY_FRAMES
 
 
 def seq_pooling(x: Tensor, invalid: Tensor) -> Tensor:
@@ -31,7 +32,7 @@ class MLP(nn.Module):
     ) -> None:
         super().__init__()
         assert len(fc_dims) >= 2
-        
+
         layers: T.List[nn.Module] = []
         for i in range(0, len(fc_dims) - 1):
             layers.append(nn.Linear(fc_dims[i], fc_dims[i + 1]))
@@ -106,20 +107,16 @@ class PolylineEncoder(nn.Module):
         return emb
 
 
-def concatenate_historical_features(batch):
-    n_batch, n_agents, n_past, _ = batch["history_positions"].shape
-    types = batch["actor_type"].view(n_batch, n_agents, 1)
+def concatenate_historical_features(history_states: torch.Tensor, actor_types: torch.Tensor):
+    """Concatenate history states with one-hot encoded actor types"""
+    n_batch, n_agents, n_past, _ = history_states.shape
+    types = actor_types.view(n_batch, n_agents, 1)
 
     NUM_CLASSES: T.Final = 5
     types_one_hot = F.one_hot(types.expand(-1, -1, n_past), num_classes=NUM_CLASSES).float()
-    # Add time dimension to the extent tensor and expand it to match the number of past timesteps
-    extent = batch["extent"].view(n_batch, n_agents, 1, -1).expand(-1, -1, n_past, -1)
     return torch.cat(
         [
-            batch["history_positions"],
-            batch["history_velocities"],
-            batch["history_yaws"],
-            extent,
+            history_states,
             types_one_hot,
         ],
         axis=-1,
@@ -205,35 +202,55 @@ class PredictionModel(nn.Module):
         # Map parameters
         self.mlp1 = nn.Linear(2, 128)
         self.polyline_encoder = PolylineEncoder(128, n_layer=3, mlp_dropout_p=0.0)
-    
+
         # Attention mechanisms
-        self.polyline_interaction = nn.MultiheadAttention(embed_dim=128, num_heads=8, dropout=0.0, batch_first=True)
-        self.actor_interaction = nn.MultiheadAttention(embed_dim=128, num_heads=8, dropout=0.0, batch_first=True)
+        self.polyline_interaction = nn.MultiheadAttention(
+            embed_dim=128, num_heads=8, dropout=0.0, batch_first=True
+        )
+        self.actor_interaction = nn.MultiheadAttention(
+            embed_dim=128, num_heads=8, dropout=0.0, batch_first=True
+        )
 
-    def forward(self, inputs: T.Dict[str, torch.Tensor]):
+    def forward(self, history_states,
+                      history_availabilities,
+                      actor_types,
+                      roadgraph_features,
+                      roadgraph_features_mask):
 
-        history_features = concatenate_historical_features(inputs)
-        history_availabilities = inputs["history_availabilities"]
+        history_features = concatenate_historical_features(history_states, actor_types)
 
         # map_feats.shape is (batch, polyline, points, features)
-        map_feats = torch.nested.to_padded_tensor(inputs["roadgraph_features"], padding=0.0)
+        map_feats = torch.nested.to_padded_tensor(roadgraph_features, padding=0.0)
         map_avails = torch.nested.to_padded_tensor(
-            inputs["roadgraph_features_mask"], padding=False
+            roadgraph_features_mask, padding=False
         ).bool()[..., 0]
 
         polyline_avails = torch.any(map_avails, dim=2)
         map_invalid = ~map_avails
         pl_invalid = ~polyline_avails
 
+        # Encode map
         x_map = self.mlp1(map_feats)
         hidden_polyline = self.polyline_encoder(x_map, map_invalid)
 
+        # Encode actors
         hidden_actors, context_actors = self.encoder(history_features, history_availabilities)
 
-        attend_to_polyline, _ = self.polyline_interaction(hidden_actors, hidden_polyline, hidden_polyline, key_padding_mask=pl_invalid)
-        attend_to_actors, _ = self.actor_interaction(hidden_actors, attend_to_polyline, attend_to_polyline, key_padding_mask=~current_availabilities)
+        # Attend actor to polylines
+        attend_to_polyline, _ = self.polyline_interaction(
+            hidden_actors, hidden_polyline, hidden_polyline, key_padding_mask=pl_invalid
+        )
 
-        current_positions = history_features[:, :, -1, :2]  # For now decoder only takes positions
+        # For now decoder only takes positions
+        current_positions = history_features[:, :, -1, :2]
         current_availabilities = history_availabilities[:, :, -1]
-        output = self.decoder(current_positions, current_availabilities, attend_to_actors, context_actors)
+        attend_to_actors, _ = self.actor_interaction(
+            hidden_actors,
+            attend_to_polyline,
+            attend_to_polyline,
+            key_padding_mask=~current_availabilities,
+        )
+        output = self.decoder(
+            current_positions, current_availabilities, attend_to_actors, context_actors
+        )
         return output

@@ -21,7 +21,13 @@ from lightning.pytorch.tuner import Tuner
 
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
 from models.prediction import PredictionModel
-from waymo_loader.feature_description import _ROADGRAPH_IDX_TO_TYPE, _ROADGRAPH_TYPE_TO_COLOR
+from waymo_loader.feature_description import (
+    _ROADGRAPH_IDX_TO_TYPE,
+    _ROADGRAPH_TYPE_TO_COLOR,
+    NUM_HISTORY_FRAMES,
+    NUM_FUTURE_FRAMES,
+)
+
 
 plt.style.use("dark_background")
 torch.set_float32_matmul_precision("medium")
@@ -67,13 +73,29 @@ class OnTrainCallback(L.Callback):
         single_sample = {k: v.cuda() for k, v in single_sample.items()}
 
         with torch.no_grad():
-            predicted_positions = pl_module.model(single_sample)
+            history_states = single_sample["gt_states"][:, :, : NUM_HISTORY_FRAMES + 1]
+            history_avails = single_sample["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
+
+            predicted_positions = pl_module.model(
+                history_states,
+                history_avails,
+                single_sample["actor_type"],
+                single_sample["roadgraph_features"],
+                single_sample["roadgraph_features_mask"],
+            )
             predicted_positions = predicted_positions[0].cpu().numpy()
 
-        history_positions = single_sample["history_positions"][0].cpu().numpy()
-        target_positions = single_sample["target_positions"][0].cpu().numpy()
-        history_availabilities = single_sample["history_availabilities"][0].cpu().numpy()
-        target_availabilities = single_sample["target_availabilities"][0].cpu().numpy()
+        # Crop the future positions to match the number of timesteps
+        target_positions = single_sample["gt_states"][0, :, -NUM_FUTURE_FRAMES:, :2].cpu().numpy()
+        target_availabilities = (
+            single_sample["gt_states_avails"][0, :, -NUM_FUTURE_FRAMES:].cpu().numpy()
+        )
+        history_positions = (
+            single_sample["gt_states"][0, :, : NUM_HISTORY_FRAMES + 1, :2].cpu().numpy()
+        )
+        history_availabilities = (
+            single_sample["gt_states_avails"][0, :, : NUM_HISTORY_FRAMES + 1].cpu().numpy()
+        )
 
         n_agents = history_positions.shape[0]
 
@@ -111,7 +133,7 @@ class OnTrainCallback(L.Callback):
         ).cpu()
 
         map_features = map_features.view(-1, 2)
-        map_avails = map_avails.view(-1, 1)[:, 0] # [N,]
+        map_avails = map_avails.view(-1, 1)[:, 0]  # [N,]
         map_points = map_features[map_avails]  # [N, 2]
         map_types = map_types.view(-1)[map_avails].to(torch.int32)  # [N,]
         map_ids = map_ids.view(-1)[map_avails].to(torch.int32)  # [N,]
@@ -154,32 +176,62 @@ class OnTrainCallback(L.Callback):
         )
 
 
+# def _compute_min_ade(predicted_positions, target_positions, target_availabilities):
+#     """Compute the average displacement error
+#     :arg predicted_positions: [batch_size, n_agents, n_timesteps, 2]
+#     :arg target_positions: [batch_size, n_agents, n_timesteps, 2]
+#     :arg target_availabilities: [batch_size, n_agents, n_timesteps, 1]
+#     """
+#     distances = torch.norm(target_positions - predicted_positions, p=2, dim=-1)
+#     return torch.mean(distances * target_availabilities)
+
+# def _compute_min_fde(predicted_positions, target_positions, target_availabilities):
+#     """Compute the final displacement error
+#     :arg predicted_positions: [batch_size, n_agents, n_timesteps, 2]
+#     :arg target_positions: [batch_size, n_agents, n_timesteps, 2]
+#     :arg target_availabilities: [batch_size, n_agents, n_timesteps, 1]
+#     """
+#     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
+
+
 class LightningModule(L.LightningModule):
     def __init__(self, dataset, fast_dev_run: bool):
         super().__init__()
         self.dataset = dataset
         self.fast_dev_run = fast_dev_run
         self.learning_rate = 0.002
-        self.n_timesteps = 30
+        self.n_timesteps = 80
         self.batch_size = 128
         self.model = PredictionModel(
-            input_features=13, hidden_size=128, n_timesteps=self.n_timesteps
+            input_features=12, hidden_size=128, n_timesteps=self.n_timesteps
         )
 
     def training_step(self, batch, batch_idx):
-        predicted_positions = self.model(batch)
+
+        history_states = batch["gt_states"][:, :, : NUM_HISTORY_FRAMES + 1, :]
+        history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
+
+        predicted_positions = self.model(
+            history_states,
+            history_avails,
+            batch["actor_type"],
+            batch["roadgraph_features"],
+            batch["roadgraph_features_mask"],
+        )
 
         # Crop the future positions to match the number of timesteps
-        future_positions = batch["target_positions"][:, :, : self.n_timesteps]
-        future_availabilities = batch["target_availabilities"][:, :, : self.n_timesteps]
+        future_positions = batch["gt_states"][:, :, -NUM_FUTURE_FRAMES:, :2]
+        future_availabilities = batch["gt_states_avails"][:, :, -NUM_FUTURE_FRAMES:]
         loss = compute_loss(predicted_positions, future_positions, future_availabilities)
-        
+
         # Compute the percentarge of elements in the map that are available, this ia metric that tells us
         # how empty the tensors are
         map_avails = torch.nested.to_padded_tensor(
             batch["roadgraph_features_mask"], padding=False
-        ).bool()[..., 0] # batch, polyline, points
-        
+        ).bool()[
+            ..., 0
+        ]  # batch, polyline, points
+
         percentage = map_avails.sum().float() / map_avails.numel()
         self.log("map_availability_percentage", percentage)
         self.log("loss/train", loss)
@@ -189,8 +241,8 @@ class LightningModule(L.LightningModule):
         predicted_positions = self.model(batch)
 
         # Crop the future positions to match the number of timesteps
-        future_positions = batch["target_positions"][:, :, : self.n_timesteps]
-        future_availabilities = batch["target_availabilities"][:, :, : self.n_timesteps]
+        future_positions = batch["gt_states"][:, :, -NUM_FUTURE_FRAMES:, :2]
+        future_availabilities = batch["gt_states_avails"][:, :, -NUM_FUTURE_FRAMES:]
         loss = compute_loss(predicted_positions, future_positions, future_availabilities)
         self.log("loss/val", loss)
         return loss

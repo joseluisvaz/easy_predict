@@ -19,7 +19,8 @@ from common_utils.tensor_utils import force_pad_batch_size
 from waymo_loader.feature_description import (
     STATE_FEATURES,
     ROADGRAPH_FEATURES,
-    _ROADGRAPH_TYPE_TO_IDX
+    _ROADGRAPH_TYPE_TO_IDX,
+    NUM_HISTORY_FRAMES
 )
 
 # Define generic type for arrays so that we can inspect when our features
@@ -31,106 +32,38 @@ MAX_NUM_AGENTS = 8
 
 @dataclass
 class MultiAgentFeatures(Generic[Array]):
-    # These features are centered around a specific agent,
-    # these also go backwards in time
-    history_positions: Array
-    history_velocities: Array
-    history_availabilities: Array
-    history_yaws: Array
+    # The order of the states is defined as in the WOMD metrics requirements for gt state ordering
+    # x, y, length, width, bbox_yaw, velocity_x, velocity_y
+    gt_states: Array
+    gt_states_avails: Array
 
-    target_positions: Array
-    target_velocities: Array
-    target_availabilities: Array
-    target_yaws: Array
-
-    # These are in an arbitrary frame they should not be transformed into a separate frame
-    centroid: Array
-    yaw: Array
-    speed: Array
-
-    extent: Array  # Extent of the object (bounding box)
     actor_type: Array
     is_sdc: Array
 
     def filter_with_mask(self, mask: Array) -> None:
-        self.history_velocities = self.history_velocities[mask]
-        self.history_positions = self.history_positions[mask]
-        self.history_yaws = self.history_yaws[mask]
-        self.history_availabilities = self.history_availabilities[mask]
-
-        self.target_velocities = self.target_velocities[mask]
-        self.target_positions = self.target_positions[mask]
-        self.target_yaws = self.target_yaws[mask]
-        self.target_availabilities = self.target_availabilities[mask]
-
-        self.centroid = self.centroid[mask]
-        self.yaw = self.yaw[mask]
-        self.speed = self.speed[mask]
-        self.extent = self.extent[mask]
+        self.gt_states = self.gt_states[mask]
+        self.gt_states_avails = self.gt_states_avails[mask]
         self.actor_type = self.actor_type[mask]
         self.is_sdc = self.is_sdc[mask]
 
     def force_pad_batch_size(self, max_n_agents: int) -> None:
-        self.history_velocities = force_pad_batch_size(self.history_velocities, max_n_agents)
-        self.history_positions = force_pad_batch_size(self.history_positions, max_n_agents)
-        self.history_yaws = force_pad_batch_size(self.history_yaws, max_n_agents)
-        self.history_availabilities = force_pad_batch_size(
-            self.history_availabilities, max_n_agents
-        )
-
-        self.target_velocities = force_pad_batch_size(self.target_velocities, max_n_agents)
-        self.target_positions = force_pad_batch_size(self.target_positions, max_n_agents)
-        self.target_yaws = force_pad_batch_size(self.target_yaws, max_n_agents)
-        self.target_availabilities = force_pad_batch_size(self.target_availabilities, max_n_agents)
-
-        self.centroid = force_pad_batch_size(self.centroid, max_n_agents)
-        self.yaw = force_pad_batch_size(self.yaw, max_n_agents)
-        self.speed = force_pad_batch_size(self.speed, max_n_agents)
-        self.extent = force_pad_batch_size(self.extent, max_n_agents)
+        self.gt_states = force_pad_batch_size(self.gt_states, max_n_agents)
+        self.gt_states_avails = force_pad_batch_size(self.gt_states_avails, max_n_agents)
         self.actor_type = force_pad_batch_size(self.actor_type, max_n_agents)
         self.is_sdc = force_pad_batch_size(self.is_sdc, max_n_agents)
 
     def transform_with_se3(self, transform: Array) -> None:
         rotation = get_so2_from_se2(transform)  # type: ignore
-
-        h_avails = self.history_availabilities
-        t_avails = self.target_availabilities
-
-        self.history_positions[h_avails] = transform_points(
-            self.history_positions[h_avails], transform
-        )
-        self.target_positions[t_avails] = transform_points(
-            self.target_positions[t_avails], transform
-        )
-        self.target_velocities[t_avails] = transform_points(
-            self.target_velocities[t_avails], rotation
-        )
-        self.history_velocities[h_avails] = transform_points(
-            self.history_velocities[h_avails], rotation
-        )
-
-        # Adjust yaws accordingly
         relative_yaw = get_yaw_from_se2(transform)  # type: ignore
-        self.history_yaws[h_avails] += relative_yaw
-        self.target_yaws[t_avails] += relative_yaw
-
-    def crop_to_desired_prediction_horizon(self, desired_length: int) -> None:
-        """Crops the features to a desired length.
-
-        Args:
-            desired_length: config containing the desired length
-        """
-        maximum_length = self.target_availabilities.shape[1]
-
-        if desired_length > maximum_length:
-            raise ValueError("Desired length exceeded maximum length of the dataset")
-
-        self.target_positions = self.target_positions[:, :desired_length]
-        self.target_velocities = self.target_velocities[:, :desired_length]
-        self.target_yaws = self.target_yaws[:, :desired_length]
-        self.target_availabilities = self.target_availabilities[:, :desired_length]
-
-
+        
+        avails = self.gt_states_avails
+        
+        gt_positions = self.gt_states[avails, :2]
+        gt_velocities = self.gt_states[avails, 5:7]
+        self.gt_states[avails, :2] = transform_points(gt_positions, transform)
+        self.gt_states[avails, 5:7] = transform_points(gt_velocities, rotation)
+        self.gt_states[avails, 4] += relative_yaw
+        
 # def generate_roadgraph_features_dict(
 #     roadgraph_features: RoadGraphSampleFeatures[np.ndarray],
 # ) -> np.ndarray:
@@ -164,87 +97,44 @@ class WaymoDatasetHelper(object):
     def generate_multi_agent_features(
         decoded_example: Dict[str, np.ndarray]
     ) -> MultiAgentFeatures[np.ndarray]:
-        past_states = np.stack(
-            [
-                decoded_example["state/past/x"],
-                decoded_example["state/past/y"],
-                decoded_example["state/past/bbox_yaw"],
-                decoded_example["state/past/velocity_x"],
-                decoded_example["state/past/velocity_y"],
-                decoded_example["state/past/speed"],
-            ],
-            axis=-1,
-        )
+        # The order of the states is defined as in the WOMD metrics requirements for gt state ordering
+        def get_states(temporal_suffix: str) -> np.ndarray:
+            """Returns the states for a specific temporal suffix."""
+            return np.stack(
+                [
+                    decoded_example[f"state/{temporal_suffix}/x"],
+                    decoded_example[f"state/{temporal_suffix}/y"],
+                    decoded_example[f"state/{temporal_suffix}/length"],
+                    decoded_example[f"state/{temporal_suffix}/width"],
+                    decoded_example[f"state/{temporal_suffix}/bbox_yaw"],
+                    decoded_example[f"state/{temporal_suffix}/velocity_x"],
+                    decoded_example[f"state/{temporal_suffix}/velocity_y"],
+                ],
+                axis=-1,
+            )
 
-        cur_states = np.stack(
-            [
-                decoded_example["state/current/x"],
-                decoded_example["state/current/y"],
-                decoded_example["state/current/bbox_yaw"],
-                decoded_example["state/current/velocity_x"],
-                decoded_example["state/current/velocity_y"],
-                decoded_example["state/current/speed"],
-            ],
-            axis=-1,
-        )
+        past_states = get_states("past")
+        cur_states = get_states("current")
+        future_states = get_states("future")
 
-        future_states = np.stack(
+        gt_states = np.concatenate([past_states, cur_states, future_states], axis=1)
+        gt_states_avails = np.concatenate(
             [
-                decoded_example["state/future/x"],
-                decoded_example["state/future/y"],
-                decoded_example["state/future/bbox_yaw"],
-                decoded_example["state/future/velocity_x"],
-                decoded_example["state/future/velocity_y"],
-                decoded_example["state/future/speed"],
+                decoded_example["state/past/valid"] > 0,
+                decoded_example["state/current/valid"] > 0,
+                decoded_example["state/future/valid"] > 0,
             ],
-            axis=-1,
-        )
-
-        extent = np.concatenate(
-            [
-                decoded_example["state/current/length"],
-                decoded_example["state/current/width"],
-                decoded_example["state/current/height"],
-            ],
-            axis=-1,
-        )
-
-        history_states = np.concatenate([past_states, cur_states], axis=1)
-        history_availabilities = np.concatenate(
-            [decoded_example["state/past/valid"] > 0, decoded_example["state/current/valid"] > 0],
             axis=1,
         ).astype(np.bool_)
-        future_availabilities = decoded_example["state/future/valid"] > 0
 
         # By convention velocities have one element less
         return MultiAgentFeatures(
-            history_positions=history_states[..., :2].astype(np.float32),
-            history_velocities=history_states[..., 3:5].astype(np.float32),
-            history_yaws=history_states[..., 2, None].astype(np.float32),
-            history_availabilities=history_availabilities.astype(np.bool_),
-            target_positions=future_states[..., :2].astype(np.float32),
-            target_velocities=future_states[..., 3:5].astype(np.float32),
-            target_yaws=future_states[..., 2, None].astype(np.float32),
-            target_availabilities=future_availabilities.astype(np.bool_),
-            centroid=cur_states[..., :2].astype(np.float32),
-            yaw=cur_states[..., 2, None].astype(np.float32),
-            speed=cur_states[..., 5, None].astype(np.float32),
-            extent=extent.astype(np.float32),
+            gt_states=gt_states.astype(np.float32),
+            gt_states_avails=gt_states_avails.astype(np.bool_),
             actor_type=decoded_example["state/type"].astype(np.intp),
             is_sdc=decoded_example["state/is_sdc"].astype(np.bool_),
         )
 
-
-# ROADGRAPH_TYPES_OF_INTEREST: Final = {
-#     "LaneCenter-Freeway",
-#     "LaneCenter-SurfaceStreet",
-#     "LaneCenter-BikeLane",
-#     "RoadEdgeBoundary",
-#     "RoadEdgeMedian",
-#     "StopSign",
-#     "Crosswalk",
-#     "SpeedBump",
-# }
 
 ROADGRAPH_TYPES_OF_INTEREST: Final = {
     "LaneCenter-Freeway",
@@ -278,10 +168,8 @@ ROADGRAPH_TYPES_TO_SUBSAMPLE = [
     "Roadline-SolidDoubleYellow",
     "RoadLine-PassingDoubleYellow",
     "RoadEdgeBoundary",
-    "RoadEdgeMedian"
+    "RoadEdgeMedian",
 ]
-
-
 
 
 def get_bounding_box(polyline: np.ndarray) -> np.ndarray:
@@ -289,9 +177,10 @@ def get_bounding_box(polyline: np.ndarray) -> np.ndarray:
     max_vals = np.max(polyline, axis=0)
     min_vals = np.min(polyline, axis=0)
     return np.concatenate([max_vals, min_vals], axis=1)
-    
+
+
 def get_bounds_from_points(xy_positions: np.ndarray, padding: float) -> np.ndarray:
-    """ Gets the bounding box of that encloses all the points, (not the smallest one).
+    """Gets the bounding box of that encloses all the points, (not the smallest one).
         Bounding box described by lower left and upper right corner
     Args:
         xy_positions: xy positions
@@ -325,11 +214,13 @@ def get_inside_bounds_mask(xy_positions: np.ndarray, bounds: np.ndarray) -> np.n
     y_max_in = y_center < bounds[1, 1]
     return x_min_in & y_min_in & x_max_in & y_max_in
 
+
 _MIN_NUM_OF_POINTS_IN_ROADGRAPH: Final = 100
 _BOUNDS_PADDING_M: Final = 10.0
 
+
 def _filter_inside_relevant_area(
-    map_positions: np.ndarray, agent_positions: np.ndarray 
+    map_positions: np.ndarray, agent_positions: np.ndarray
 ) -> Dict[str, np.ndarray]:
     """Filter data inside relevant area, returns a mask"""
     # If the map is already small then just return a valid mask
@@ -341,7 +232,7 @@ def _filter_inside_relevant_area(
         bounds = get_bounds_from_points(agent_positions, current_padding_m)
         inside_bounds_mask = get_inside_bounds_mask(map_positions, bounds)
         n_inside_mask = np.sum(inside_bounds_mask)
-        
+
         if n_inside_mask > _MIN_NUM_OF_POINTS_IN_ROADGRAPH:
             break
         current_padding_m += 10.0
@@ -351,15 +242,15 @@ def _filter_inside_relevant_area(
 def _parse_roadgraph_features(
     decoded_example: Dict[str, np.ndarray], to_ego_se3: np.ndarray, valid_positions: np.ndarray
 ) -> Dict[str, torch.Tensor]:
-    
+
     def _apply_validity_masks(points, valid, types, ids):
         """Filter the roadgraph based on validity and type of the roadgraph element"""
         points = points[valid]  # [M, 2]
-        ids = ids[valid].astype(np.int32) # [M,]
-        types = types[valid] # [M,]
-        
+        ids = ids[valid].astype(np.int32)  # [M,]
+        types = types[valid]  # [M,]
+
         idx_of_iterest = [_ROADGRAPH_TYPE_TO_IDX[type] for type in ROADGRAPH_TYPES_OF_INTEREST]
-        mask_types = np.isin(types, list(idx_of_iterest)) # [M,]
+        mask_types = np.isin(types, list(idx_of_iterest))  # [M,]
         map_mask = _filter_inside_relevant_area(points, valid_positions)
         total_mask = mask_types & map_mask
 
@@ -367,7 +258,7 @@ def _parse_roadgraph_features(
         valid_ids = ids[total_mask]
         valid_types = types[total_mask]
         return valid_points, valid_ids, valid_types
-        
+
     # get only the rotation component to transform the polyline directions
     # rotation = get_so2_from_se2(to_ego_se3)
     points = transform_points(decoded_example["roadgraph_samples/xyz"][:, :2], to_ego_se3)
@@ -377,36 +268,37 @@ def _parse_roadgraph_features(
 
     valid_points, valid_ids, valid_types = _apply_validity_masks(points, valid, types, ids)
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
-     
+
     def _subsample_sequence(sequence: np.ndarray, subsample: int):
         if len(sequence) <= 3:
             return sequence
         indices = np.arange(1, len(sequence) - 1, subsample)
         indices = np.concatenate(([0], indices, [len(sequence) - 1]))
         return sequence[indices]
-        
+
     SUBSAMPLE: T.Final = 4
     MAX_POLYLINE_LENGTH: T.Final = 20
     ROADGRAPH_IDX_TO_SUBSAMPLE = {
         _ROADGRAPH_TYPE_TO_IDX[_type] for _type in ROADGRAPH_TYPES_TO_SUBSAMPLE
     }
+
     def _select_and_decompose_sequences(flattened_sequences: np.ndarray, types: np.ndarray):
         """Select the unique ids and decompose the polylines into smaller pieces"""
         decomposed = []
         for id in unique_ids:
             indices = valid_ids == id
-            polyline_type = types[indices][0] # Get the type of this polyline 
+            polyline_type = types[indices][0]  # Get the type of this polyline
             subsample_factor = SUBSAMPLE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
             subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
             for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
                 decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
         return decomposed
-    
+
     chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
     chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
     chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
-    
+
     def _nest_and_pad(tensor: np.ndarray, torch_type: Any, padding: Any) -> np.ndarray:
         nested_tensor = torch.nested.nested_tensor(tensor, dtype=torch_type)
         return torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
@@ -418,9 +310,8 @@ def _parse_roadgraph_features(
         "roadgraph_features_ids": _nest_and_pad(chopped_ids, torch.int16, False),
     }
 
-
 def _generate_features(
-    decoded_example: Dict[str, np.ndarray], future_num_frames=80, max_n_agents=MAX_NUM_AGENTS
+    decoded_example: Dict[str, np.ndarray], max_n_agents=MAX_NUM_AGENTS
 ) -> Dict[str, np.ndarray]:
     # The sdc is also considered so that we can retrieve its features
     tracks_to_predict = (decoded_example["state/tracks_to_predict"].squeeze() > 0).astype(np.bool_)
@@ -428,22 +319,20 @@ def _generate_features(
     tracks_to_predict = np.logical_or(tracks_to_predict, is_sdc_mask)
 
     agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
-    agent_features.crop_to_desired_prediction_horizon(future_num_frames)
     # Now remove the unwanted agents by filtering with tracks to predict
     agent_features.filter_with_mask(tracks_to_predict)
+    
+    agent_features_current_state = agent_features.gt_states[:, NUM_HISTORY_FRAMES]
 
     # Transform the scene to have the ego vehicle at the origin
     ego_idx = np.argmax(agent_features.is_sdc.squeeze())
     to_sdc_se3 = get_transformation_matrix(
-        agent_features.centroid[ego_idx],
-        agent_features.yaw[ego_idx],
+        agent_features_current_state[ego_idx, :2], # x, y
+        agent_features_current_state[ego_idx, 4], # yaw
     )
     agent_features.transform_with_se3(to_sdc_se3)
-    
-    valid_history_positions = agent_features.history_positions[agent_features.history_availabilities]
-    valid_target_positions = agent_features.target_positions[agent_features.target_availabilities]
-    valid_positions = np.concatenate((valid_history_positions, valid_target_positions), axis=0)
 
+    valid_positions = agent_features.gt_states[agent_features.gt_states_avails][:, :2]
     map_features = _parse_roadgraph_features(decoded_example, to_sdc_se3, valid_positions)
 
     # Now pad the remaining agents to the max number of agents, needed to have tensors the same size.

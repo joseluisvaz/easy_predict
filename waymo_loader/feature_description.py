@@ -3,6 +3,9 @@ from collections import OrderedDict
 
 import tensorflow as tf
 
+NUM_HISTORY_FRAMES = 10
+NUM_FUTURE_FRAMES = 80
+
 _ROADGRAPH_TYPE_TO_IDX = {
     "LaneCenter-Freeway": 1,
     "LaneCenter-SurfaceStreet": 2,
