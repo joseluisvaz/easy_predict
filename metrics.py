@@ -2,12 +2,10 @@ from google.protobuf import text_format
 
 from waymo_open_dataset.metrics.ops import py_metrics_ops
 from waymo_open_dataset.metrics.python import config_util_py as config_util
-from waymo_open_dataset.metrics.python.motion_metrics import get_motion_metric_ops
 from waymo_open_dataset.protos import motion_metrics_pb2
 
 import tensorflow as tf
 from torch import Tensor as TorchTensor
-from tensorflow import Tensor as TfTensor
 
 
 def _default_metrics_config():

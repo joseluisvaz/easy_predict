@@ -211,19 +211,22 @@ class PredictionModel(nn.Module):
             embed_dim=128, num_heads=8, dropout=0.0, batch_first=True
         )
 
-    def forward(self, history_states,
-                      history_availabilities,
-                      actor_types,
-                      roadgraph_features,
-                      roadgraph_features_mask):
+    def forward(
+        self,
+        history_states,
+        history_availabilities,
+        actor_types,
+        roadgraph_features,
+        roadgraph_features_mask,
+    ):
 
         history_features = concatenate_historical_features(history_states, actor_types)
 
         # map_feats.shape is (batch, polyline, points, features)
         map_feats = torch.nested.to_padded_tensor(roadgraph_features, padding=0.0)
-        map_avails = torch.nested.to_padded_tensor(
-            roadgraph_features_mask, padding=False
-        ).bool()[..., 0]
+        map_avails = torch.nested.to_padded_tensor(roadgraph_features_mask, padding=False).bool()[
+            ..., 0
+        ]
 
         polyline_avails = torch.any(map_avails, dim=2)
         map_invalid = ~map_avails

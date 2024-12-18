@@ -17,10 +17,11 @@ from waymo_loader.feature_description import (
 
 
 class OnTrainCallback(L.Callback):
-    def __init__(self, dataset: WaymoH5Dataset):
+    def __init__(self, datadir: str):
         super().__init__()
 
         self._n_samples = 5
+        dataset = WaymoH5Dataset(datadir)
         self._dataloader = DataLoader(
             dataset,
             batch_size=1,

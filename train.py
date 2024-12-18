@@ -1,6 +1,6 @@
 from argparse import ArgumentParser, Namespace
 import warnings
-from typing import Dict
+from typing import Dict, Optional, Any
 
 # Ignore the warning about nested tensors to not spam the terminal
 warnings.filterwarnings(
@@ -42,21 +42,24 @@ task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPred
 
 
 class LightningModule(L.LightningModule):
-    def __init__(self, dataset, fast_dev_run: bool):
+    def __init__(
+        self, data_dir: str, fast_dev_run: bool, hyperparameters: Dict[str, Any] 
+    ):
         super().__init__()
+        self.save_hyperparameters()
         self.task = task
-        self.dataset = dataset
+        self.data_dir = data_dir
         self.fast_dev_run = fast_dev_run
-        self.learning_rate = 0.002
+        self.learning_rate = hyperparameters["learning_rate"] 
         self.n_timesteps = 80
-        self.batch_size = 128
+        self.batch_size = hyperparameters["batch_size"]
         self.model = PredictionModel(
-            input_features=12, hidden_size=128, n_timesteps=self.n_timesteps
+            input_features=12, hidden_size=hyperparameters["hidden_size"], n_timesteps=self.n_timesteps
         )
 
         self.metrics_config = _default_metrics_config()
         self.metrics = MotionMetrics(self.metrics_config)
-    
+
     def _update_metrics(self, batch: Dict[str, Tensor], predicted_positions: Tensor):
         batch_size, num_agents, _, _ = predicted_positions.shape
         # [batch_size, num_agents, steps, 2] -> # [batch_size, 1, 1, num_agents, steps, 2].
@@ -81,7 +84,7 @@ class LightningModule(L.LightningModule):
             prediction_ground_truth_indices_mask=pred_gt_indices_mask,
             object_type=batch["actor_type"][..., 0],
         )
-    
+
     def _inference_and_loss(self, batch):
         history_states = batch["gt_states"][:, :, : NUM_HISTORY_FRAMES + 1, :]
         history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
@@ -99,7 +102,6 @@ class LightningModule(L.LightningModule):
         future_availabilities = batch["gt_states_avails"][:, :, -NUM_FUTURE_FRAMES:]
         loss = compute_loss(predicted_positions, future_positions, future_availabilities)
         return predicted_positions, loss
-    
 
     def training_step(self, batch, batch_idx):
 
@@ -130,8 +132,9 @@ class LightningModule(L.LightningModule):
         return optimizer
 
     def train_dataloader(self):
+        dataset = WaymoH5Dataset(self.data_dir)
         return DataLoader(
-            self.dataset,
+            dataset,
             batch_size=self.batch_size if not self.fast_dev_run else 8,
             num_workers=8 if not self.fast_dev_run else 1,
             shuffle=True,
@@ -156,20 +159,35 @@ class LightningModule(L.LightningModule):
     #     )
 
 
-def main(data_dir, fast_dev_run, use_gpu):
+def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: Optional[str]):
     dataset = WaymoH5Dataset(data_dir)
 
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
-    module = LightningModule(dataset, fast_dev_run)
+    hyperparameters = {"batch_size": 128, "learning_rate": 0.0002, "hidden_size": 128}
+    task.connect(hyperparameters)
+
+    # Load if a checkpoint is provided
+    module = (
+        LightningModule(data_dir, fast_dev_run, hyperparameters)
+        if not ckpt_path
+        else LightningModule.load_from_checkpoint(
+            ckpt_path,
+            data_dir=data_dir,
+            fast_dev_run=fast_dev_run,
+            hyperparameters=hyperparameters,
+            map_location="cpu",
+        )
+    )
+
     trainer = L.Trainer(
         max_epochs=10,
         accelerator="gpu" if use_gpu else "cpu",
         devices=1,
         fast_dev_run=fast_dev_run,
         # precision="16-mixed",
-        callbacks=OnTrainCallback(dataset),
+        callbacks=OnTrainCallback(data_dir),
     )
 
     LR_FIND = False
@@ -192,9 +210,10 @@ def _parse_arguments() -> Namespace:
     )
     parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
     parser.add_argument("--gpu", action="store_true", help="Use GPU")
+    parser.add_argument("--ckpt", required=False, type=str, help="Checkpoint file")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_arguments()
-    main(args.data_dir, args.fast_dev_run, args.gpu)
+    main(args.data_dir, args.fast_dev_run, args.gpu, args.ckpt)
