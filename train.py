@@ -72,17 +72,17 @@ class LightningModule(L.LightningModule):
         pred_gt_indices = torch.arange(num_agents, dtype=torch.int64)
         pred_gt_indices = pred_gt_indices[None, None, :].expand(batch_size, 1, num_agents)
         # For the tracks to predict use the current timestamps
-        pred_gt_indices_mask = batch["gt_states_avails"][:, :, NUM_HISTORY_FRAMES]
+        pred_gt_indices_mask = batch["predict/gt_states_avails"][:, :, NUM_HISTORY_FRAMES]
         pred_gt_indices_mask = pred_gt_indices_mask.unsqueeze(1)
 
         self.metrics.update_state(
             prediction_trajectory=predicted_positions,
             prediction_score=pred_score,
-            ground_truth_trajectory=batch["gt_states"],
-            ground_truth_is_valid=batch["gt_states_avails"],
+            ground_truth_trajectory=batch["predict/gt_states"],
+            ground_truth_is_valid=batch["predict/gt_states_avails"],
             prediction_ground_truth_indices=pred_gt_indices,
             prediction_ground_truth_indices_mask=pred_gt_indices_mask,
-            object_type=batch["actor_type"][..., 0],
+            object_type=batch["predict/actor_type"][..., 0],
         )
 
     def _inference_and_loss(self, batch):
@@ -108,7 +108,20 @@ class LightningModule(L.LightningModule):
 
         predicted_positions, loss = self._inference_and_loss(batch)
 
-        self._update_metrics(batch, predicted_positions)
+        with torch.no_grad():
+            history_states = batch["predict/gt_states"][:, :, : NUM_HISTORY_FRAMES + 1, :]
+            history_avails = batch["predict/gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
+
+            predicted_positions = self.model(
+                history_states,
+                history_avails,
+                batch["predict/actor_type"],
+                batch["roadgraph_features"],
+                batch["roadgraph_features_mask"],
+                batch["roadgraph_features_types"],
+            )
+            
+            self._update_metrics(batch, predicted_positions)
 
         # Compute the percentarge of elements in the map that are available, this ia metric that tells us
         # how empty the tensors are
@@ -117,7 +130,7 @@ class LightningModule(L.LightningModule):
         ).bool()[
             ..., 0
         ]  # batch, polyline, points
-        
+
         _, n_polyline, _ = map_avails.shape
         self.log("map_sizes/polyline", n_polyline)
 
@@ -169,7 +182,7 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: Optional[s
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
-    hyperparameters = {"batch_size": 128, "learning_rate": 0.0002, "hidden_size": 128}
+    hyperparameters = {"batch_size": 64, "learning_rate": 0.0002, "hidden_size": 128}
     task.connect(hyperparameters)
 
     # Load if a checkpoint is provided

@@ -66,7 +66,7 @@ class OnTrainCallback(L.Callback):
 
     def on_train_epoch_end(self, trainer, pl_module):
         for idx, single_sample_batch in enumerate(
-            itertools.islice(self._dataloader, self._n_samples)
+            itertools.islice(self._dataloader, 10, 10 + self._n_samples)
         ):
             # Just extract a single sample from the batch and keep the batch dimension
             self.log_plot_to_clearml(

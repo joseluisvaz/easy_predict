@@ -110,8 +110,9 @@ class PolylineEncoder(nn.Module):
 def concatenate_historical_features(history_states: torch.Tensor, actor_types: torch.Tensor):
     """Concatenate history states with one-hot encoded actor types"""
     n_batch, n_agents, n_past, _ = history_states.shape
-    types = actor_types.view(n_batch, n_agents, 1)
-
+    # clamp to 0, to remove instances of -1
+    types = actor_types.clamp_(min=0).view(n_batch, n_agents, 1)
+    
     NUM_CLASSES: T.Final = 5
     types_one_hot = F.one_hot(types.expand(-1, -1, n_past), num_classes=NUM_CLASSES).float()
     return torch.cat(
@@ -161,7 +162,7 @@ class Encoder(nn.Module):
 
 class Decoder(nn.Module):
     INPUT_SIZE = 2  # x, y
-    OUTPUT_SIZE = 2  # dx, dy 
+    OUTPUT_SIZE = 2  # dx, dy
 
     def __init__(self, hidden_size, n_timesteps):
         super(Decoder, self).__init__()

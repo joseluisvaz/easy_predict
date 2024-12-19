@@ -20,14 +20,14 @@ from waymo_loader.feature_description import (
     STATE_FEATURES,
     ROADGRAPH_FEATURES,
     _ROADGRAPH_TYPE_TO_IDX,
-    NUM_HISTORY_FRAMES
+    NUM_HISTORY_FRAMES,
 )
 
 # Define generic type for arrays so that we can inspect when our features
 # have numpy arrays or torch tensors
 Array = TypeVar("Array", np.ndarray, Tensor)
 
-MAX_NUM_AGENTS = 8
+MAX_NUM_AGENTS = 128
 
 
 @dataclass
@@ -55,15 +55,16 @@ class MultiAgentFeatures(Generic[Array]):
     def transform_with_se3(self, transform: Array) -> None:
         rotation = get_so2_from_se2(transform)  # type: ignore
         relative_yaw = get_yaw_from_se2(transform)  # type: ignore
-        
+
         avails = self.gt_states_avails
-        
+
         gt_positions = self.gt_states[avails, :2]
         gt_velocities = self.gt_states[avails, 5:7]
         self.gt_states[avails, :2] = transform_points(gt_positions, transform)
         self.gt_states[avails, 5:7] = transform_points(gt_velocities, rotation)
         self.gt_states[avails, 4] += relative_yaw
-        
+
+
 # def generate_roadgraph_features_dict(
 #     roadgraph_features: RoadGraphSampleFeatures[np.ndarray],
 # ) -> np.ndarray:
@@ -259,7 +260,7 @@ def _parse_roadgraph_features(
         valid_dirs = dirs[total_mask]
         valid_ids = ids[total_mask]
         valid_types = types[total_mask]
-        return valid_points, valid_dirs,valid_ids, valid_types
+        return valid_points, valid_dirs, valid_ids, valid_types
 
     # get only the rotation component to transform the polyline directions
     rotation = get_so2_from_se2(to_ego_se3)
@@ -269,7 +270,9 @@ def _parse_roadgraph_features(
     valid = decoded_example["roadgraph_samples/valid"][:, 0].astype(np.bool_)
     types = decoded_example["roadgraph_samples/type"][:, 0].astype(np.int64)
 
-    valid_points, valid_dirs, valid_ids, valid_types = _apply_validity_masks(points, dirs, valid, types, ids)
+    valid_points, valid_dirs, valid_ids, valid_types = _apply_validity_masks(
+        points, dirs, valid, types, ids
+    )
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
 
     def _subsample_sequence(sequence: np.ndarray, subsample: int):
@@ -306,7 +309,7 @@ def _parse_roadgraph_features(
     def _nest_and_pad(tensor: np.ndarray, torch_type: Any, padding: Any) -> np.ndarray:
         nested_tensor = torch.nested.nested_tensor(tensor, dtype=torch_type)
         return torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
-        
+
     chopped_polylines = _nest_and_pad(chopped_polylines, torch.float, 0.0)
     chopped_dirs = _nest_and_pad(chopped_dirs, torch.float, 0.0)
     features = np.concatenate((chopped_polylines, chopped_dirs), axis=-1)
@@ -314,9 +317,12 @@ def _parse_roadgraph_features(
     return {
         "roadgraph_features": features,
         "roadgraph_features_mask": _nest_and_pad(masks, torch.bool, False),
-        "roadgraph_features_types": _nest_and_pad(chopped_types, torch.int64, 0), # int64 because it has to be used as an index
+        "roadgraph_features_types": _nest_and_pad(
+            chopped_types, torch.int64, 0
+        ),  # int64 because it has to be used as an index
         "roadgraph_features_ids": _nest_and_pad(chopped_ids, torch.int16, 0),
     }
+
 
 def _generate_features(
     decoded_example: Dict[str, np.ndarray], max_n_agents=MAX_NUM_AGENTS
@@ -324,19 +330,18 @@ def _generate_features(
     # The sdc is also considered so that we can retrieve its features
     tracks_to_predict = (decoded_example["state/tracks_to_predict"].squeeze() > 0).astype(np.bool_)
     is_sdc_mask = (decoded_example["state/is_sdc"].squeeze() > 0).astype(np.bool_)
-    tracks_to_predict = np.logical_or(tracks_to_predict, is_sdc_mask)
+    # tracks_to_predict = np.logical_or(tracks_to_predict, is_sdc_mask)
 
     agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
-    # Now remove the unwanted agents by filtering with tracks to predict
-    agent_features.filter_with_mask(tracks_to_predict)
-    
+    # # Now remove the unwanted agents by filtering with tracks to predict
+    # agent_features.filter_with_mask(tracks_to_predict)
     agent_features_current_state = agent_features.gt_states[:, NUM_HISTORY_FRAMES]
 
     # Transform the scene to have the ego vehicle at the origin
     ego_idx = np.argmax(agent_features.is_sdc.squeeze())
     to_sdc_se3 = get_transformation_matrix(
-        agent_features_current_state[ego_idx, :2], # x, y
-        agent_features_current_state[ego_idx, 4], # yaw
+        agent_features_current_state[ego_idx, :2],  # x, y
+        agent_features_current_state[ego_idx, 4],  # yaw
     )
     agent_features.transform_with_se3(to_sdc_se3)
 
@@ -345,8 +350,19 @@ def _generate_features(
 
     # Now pad the remaining agents to the max number of agents, needed to have tensors the same size.
     # We also add 1 to the max number of agents to account for the ego vehicle
-    agent_features.force_pad_batch_size(max_n_agents + 1)
-    return agent_features.__dict__, map_features
+    agent_features.force_pad_batch_size(max_n_agents)
+    
+    features = agent_features.__dict__
+
+    TO_PREDICT = 8
+    agent_features.filter_with_mask(tracks_to_predict)
+    agent_features.force_pad_batch_size(TO_PREDICT)
+    
+    features["predict/gt_states"] = agent_features.gt_states
+    features["predict/gt_states_avails"] = agent_features.gt_states_avails 
+    features["predict/actor_type"] = agent_features.actor_type
+    
+    return features, map_features
 
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:

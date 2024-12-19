@@ -54,8 +54,6 @@ class MotionMetrics(tf.keras.metrics.Metric):
         self._object_type = []
         self._metrics_config = config
         self.metric_names = config_util.get_breakdown_names_from_motion_config(config)
-        print("STEPS!!!!")
-        print(config.step_configurations)
 
     def reset_state(self):
         self._prediction_trajectory = []
