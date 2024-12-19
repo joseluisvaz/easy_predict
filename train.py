@@ -15,6 +15,7 @@ torch.autograd.set_detect_anomaly(True)
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 from clearml import Task
+from omegaconf import OmegaConf, DictConfig
 import lightning as L
 from lightning.pytorch.tuner import Tuner
 from metrics import MotionMetrics, _default_metrics_config
@@ -42,18 +43,18 @@ task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPred
 
 
 class LightningModule(L.LightningModule):
-    def __init__(self, data_dir: str, fast_dev_run: bool, hyperparameters: Dict[str, Any]):
+    def __init__(self, data_dir: str, fast_dev_run: bool, hyperparameters: DictConfig):
         super().__init__()
         self.save_hyperparameters()
         self.task = task
         self.data_dir = data_dir
         self.fast_dev_run = fast_dev_run
-        self.learning_rate = hyperparameters["learning_rate"]
+        self.learning_rate = hyperparameters.learning_rate
         self.n_timesteps = 80
-        self.batch_size = hyperparameters["batch_size"]
+        self.batch_size = hyperparameters.batch_size
         self.model = PredictionModel(
             input_features=12,
-            hidden_size=hyperparameters["hidden_size"],
+            hidden_size=hyperparameters.hidden_size,
             n_timesteps=self.n_timesteps,
         )
 
@@ -120,7 +121,7 @@ class LightningModule(L.LightningModule):
                 batch["roadgraph_features_mask"],
                 batch["roadgraph_features_types"],
             )
-            
+
             self._update_metrics(batch, predicted_positions)
 
         # Compute the percentarge of elements in the map that are available, this ia metric that tells us
@@ -182,7 +183,7 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: Optional[s
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
-    hyperparameters = {"batch_size": 64, "learning_rate": 0.0002, "hidden_size": 128}
+    hyperparameters = OmegaConf.load("configs/hyperparameters.yaml")
     task.connect(hyperparameters)
 
     # Load if a checkpoint is provided
@@ -209,12 +210,13 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: Optional[s
     metrics_callback = OnTrainCallback(data_dir)
 
     trainer = L.Trainer(
-        max_epochs=10,
+        max_epochs=hyperparameters.max_epochs,
         accelerator="gpu" if use_gpu else "cpu",
         devices=1,
         fast_dev_run=fast_dev_run,
-        # precision="16-mixed",
+        precision="16-mixed",
         callbacks=[metrics_callback, checkpoint_callback],
+        # accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
     )
 
     LR_FIND = False

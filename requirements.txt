@@ -1,0 +1,11 @@
+pytorch-lightning==2.4.0
+torch==2.4.1+cu121
+torch-geometric==2.6.1
+torch_scatter==2.1.2+pt24cu121
+torch_sparse==0.6.18+pt24cu121
+torchaudio==2.4.1+cu121
+torchmetrics==1.5.1
+torchvision==0.6.0a0+35d732a
+omegaconf==2.3.0
+waymo-open-dataset-tf-2-11-0==1.6.0
+h5py==3.11.0

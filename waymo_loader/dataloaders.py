@@ -36,7 +36,6 @@ class MultiAgentFeatures(Generic[Array]):
     # x, y, length, width, bbox_yaw, velocity_x, velocity_y
     gt_states: Array
     gt_states_avails: Array
-
     actor_type: Array
     is_sdc: Array
 
@@ -64,6 +63,36 @@ class MultiAgentFeatures(Generic[Array]):
         self.gt_states[avails, 5:7] = transform_points(gt_velocities, rotation)
         self.gt_states[avails, 4] += relative_yaw
 
+# def filter_with_mask(agent_features: MultiAgentFeatures[np.ndarray], mask: np.ndarray) -> MultiAgentFeatures[np.ndarray]:
+#     return MultiAgentFeatures(
+#         gt_states=agent_features.gt_states[mask],
+#         gt_states_avails=agent_features.gt_states_avails[mask],
+#         actor_type=agent_features.actor_type[mask],
+#         is_sdc=agent_features.is_sdc[mask],
+#     )
+
+# def force_pad_batch_size(agent_features: MultiAgentFeatures[np.ndarray], max_n_agents: int) -> MultiAgentFeatures[np.ndarray]:
+#     return MultiAgentFeatures(
+#         gt_states=force_pad_batch_size(agent_features.gt_states, max_n_agents),
+#         gt_states_avails=force_pad_batch_size(agent_features.gt_states_avails, max_n_agents),
+#         actor_type=force_pad_batch_size(agent_features.actor_type, max_n_agents),
+#         is_sdc=force_pad_batch_size(agent_features.is_sdc, max_n_agents),
+#     )
+    
+# def transform_with_se3_inplace(source_agent_features: MultiAgentFeatures[np.ndarray], transform: np.ndarray) -> MultiAgentFeatures[np.ndarray]:
+#     rotation = get_so2_from_se2(transform)  # type: ignore
+#     relative_yaw = get_yaw_from_se2(transform)  # type: ignore
+
+#     avails = agent_features.gt_states_avails
+
+#     gt_positions = agent_features.gt_states[avails, :2]
+#     gt_velocities = agent_features.gt_states[avails, 5:7]
+#     agent_features.gt_states[avails, :2] = transform_points(gt_positions, transform)
+#     agent_features.gt_states[avails, 5:7] = transform_points(gt_velocities, rotation)
+#     agent_features.gt_states[avails, 4] += relative_yaw
+    
+    
+    
 
 # def generate_roadgraph_features_dict(
 #     roadgraph_features: RoadGraphSampleFeatures[np.ndarray],
