@@ -1,8 +1,8 @@
 # Train arguments
 max_epochs: 10
-batch_size: 128
+batch_size: 128 
 learning_rate: 0.0002
-# accumulate_grad_batches: 1
+accumulate_grad_batches: 1
 
 # Model arguments
 hidden_size: 128

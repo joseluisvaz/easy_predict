@@ -1,6 +1,7 @@
 from argparse import ArgumentParser, Namespace
 import warnings
-from typing import Dict, Optional, Any
+import typing as T
+from pytorch_lightning.profilers import SimpleProfiler
 
 # Ignore the warning about nested tensors to not spam the terminal
 warnings.filterwarnings(
@@ -41,6 +42,8 @@ def compute_loss(predicted_positions, target_positions, target_availabilities):
 
 task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
 
+MAX_PREDICT_AGENTS = 8
+
 
 class LightningModule(L.LightningModule):
     def __init__(self, data_dir: str, fast_dev_run: bool, hyperparameters: DictConfig):
@@ -61,7 +64,16 @@ class LightningModule(L.LightningModule):
         self.metrics_config = _default_metrics_config()
         self.metrics = MotionMetrics(self.metrics_config)
 
-    def _update_metrics(self, batch: Dict[str, Tensor], predicted_positions: Tensor):
+    def _update_metrics(self, batch: T.Dict[str, Tensor], full_predicted_positions: Tensor):
+
+        # Chop all the tensors to match the number of predicted agents the tracks to predict mask
+        # will take care of just computing the metrics for the relevant agents
+        predicted_positions = full_predicted_positions[:, :MAX_PREDICT_AGENTS]
+        gt_states_avails = batch["gt_states_avails"][:, :MAX_PREDICT_AGENTS]
+        gt_states = batch["gt_states"][:, :MAX_PREDICT_AGENTS]
+        actor_type = batch["actor_type"][:, :MAX_PREDICT_AGENTS]
+        tracks_to_predict_mask = batch["tracks_to_predict"][:, :MAX_PREDICT_AGENTS]
+
         batch_size, num_agents, _, _ = predicted_positions.shape
         # [batch_size, num_agents, steps, 2] -> # [batch_size, 1, 1, num_agents, steps, 2].
         # The added dimensions are top_k = 1, num_agents_per_joint_prediction = 1.
@@ -73,17 +85,17 @@ class LightningModule(L.LightningModule):
         pred_gt_indices = torch.arange(num_agents, dtype=torch.int64)
         pred_gt_indices = pred_gt_indices[None, None, :].expand(batch_size, 1, num_agents)
         # For the tracks to predict use the current timestamps
-        pred_gt_indices_mask = batch["predict/gt_states_avails"][:, :, NUM_HISTORY_FRAMES]
+        pred_gt_indices_mask = tracks_to_predict_mask
         pred_gt_indices_mask = pred_gt_indices_mask.unsqueeze(1)
 
         self.metrics.update_state(
             prediction_trajectory=predicted_positions,
             prediction_score=pred_score,
-            ground_truth_trajectory=batch["predict/gt_states"],
-            ground_truth_is_valid=batch["predict/gt_states_avails"],
+            ground_truth_trajectory=gt_states,
+            ground_truth_is_valid=gt_states_avails,
             prediction_ground_truth_indices=pred_gt_indices,
             prediction_ground_truth_indices_mask=pred_gt_indices_mask,
-            object_type=batch["predict/actor_type"][..., 0],
+            object_type=actor_type[..., 0],
         )
 
     def _inference_and_loss(self, batch):
@@ -110,18 +122,6 @@ class LightningModule(L.LightningModule):
         predicted_positions, loss = self._inference_and_loss(batch)
 
         with torch.no_grad():
-            history_states = batch["predict/gt_states"][:, :, : NUM_HISTORY_FRAMES + 1, :]
-            history_avails = batch["predict/gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
-
-            predicted_positions = self.model(
-                history_states,
-                history_avails,
-                batch["predict/actor_type"],
-                batch["roadgraph_features"],
-                batch["roadgraph_features_mask"],
-                batch["roadgraph_features_types"],
-            )
-
             self._update_metrics(batch, predicted_positions)
 
         # Compute the percentarge of elements in the map that are available, this ia metric that tells us
@@ -140,11 +140,6 @@ class LightningModule(L.LightningModule):
         self.log("loss/train", loss)
         return loss
 
-    def validation_step(self, batch, batch_idx):
-        _, loss = self._inference_and_loss(batch)
-        self.log("loss/val", loss)
-        return loss
-
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
         return optimizer
@@ -153,33 +148,18 @@ class LightningModule(L.LightningModule):
         dataset = WaymoH5Dataset(self.data_dir)
         return DataLoader(
             dataset,
-            batch_size=self.batch_size if not self.fast_dev_run else 8,
-            num_workers=8 if not self.fast_dev_run else 1,
+            batch_size=self.batch_size,
+            num_workers=8,
             shuffle=True,
             persistent_workers=True if not self.fast_dev_run else False,
             pin_memory=False,
             drop_last=True,
-            prefetch_factor=8 if not self.fast_dev_run else None,
+            prefetch_factor=4 if not self.fast_dev_run else None,
             collate_fn=collate_waymo,
         )
 
-    # def val_dataloader(self):
-    #     return DataLoader(
-    #         self.dataset,
-    #         batch_size=self.batch_size if not self.fast_dev_run else 8,
-    #         num_workers=8 if not self.fast_dev_run else 1,
-    #         shuffle=False,
-    #         persistent_workers=True if not self.fast_dev_run else False,
-    #         pin_memory=False,
-    #         drop_last=True,
-    #         prefetch_factor=8 if not self.fast_dev_run else None,
-    #         collate_fn=collate_waymo,
-    #     )
 
-
-def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: Optional[str]):
-    dataset = WaymoH5Dataset(data_dir)
-
+def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
@@ -216,7 +196,8 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: Optional[s
         fast_dev_run=fast_dev_run,
         precision="16-mixed",
         callbacks=[metrics_callback, checkpoint_callback],
-        # accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
+        accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
+        profiler=SimpleProfiler(),
     )
 
     LR_FIND = False

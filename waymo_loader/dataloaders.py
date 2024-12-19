@@ -38,18 +38,21 @@ class MultiAgentFeatures(Generic[Array]):
     gt_states_avails: Array
     actor_type: Array
     is_sdc: Array
+    tracks_to_predict: Array
 
     def filter_with_mask(self, mask: Array) -> None:
         self.gt_states = self.gt_states[mask]
         self.gt_states_avails = self.gt_states_avails[mask]
         self.actor_type = self.actor_type[mask]
         self.is_sdc = self.is_sdc[mask]
+        self.tracks_to_predict = self.tracks_to_predict[mask]
 
     def force_pad_batch_size(self, max_n_agents: int) -> None:
         self.gt_states = force_pad_batch_size(self.gt_states, max_n_agents)
         self.gt_states_avails = force_pad_batch_size(self.gt_states_avails, max_n_agents)
         self.actor_type = force_pad_batch_size(self.actor_type, max_n_agents)
         self.is_sdc = force_pad_batch_size(self.is_sdc, max_n_agents)
+        self.tracks_to_predict = force_pad_batch_size(self.tracks_to_predict, max_n_agents)
 
     def transform_with_se3(self, transform: Array) -> None:
         rotation = get_so2_from_se2(transform)  # type: ignore
@@ -63,36 +66,12 @@ class MultiAgentFeatures(Generic[Array]):
         self.gt_states[avails, 5:7] = transform_points(gt_velocities, rotation)
         self.gt_states[avails, 4] += relative_yaw
 
-# def filter_with_mask(agent_features: MultiAgentFeatures[np.ndarray], mask: np.ndarray) -> MultiAgentFeatures[np.ndarray]:
-#     return MultiAgentFeatures(
-#         gt_states=agent_features.gt_states[mask],
-#         gt_states_avails=agent_features.gt_states_avails[mask],
-#         actor_type=agent_features.actor_type[mask],
-#         is_sdc=agent_features.is_sdc[mask],
-#     )
+# def features_filter_with_mask_inplace(agent_features: MultiAgentFeatures[np.ndarray], mask: np.ndarray) -> None:
+#     agent_features.gt_states = agent_features.gt_states[mask]
+#     agent_features.gt_states_avails = agent_features.gt_states_avails[mask]
+#     agent_features.actor_type = agent_features.actor_type[mask]
+#     agent_features.is_sdc = agent_features.is_sdc[mask]
 
-# def force_pad_batch_size(agent_features: MultiAgentFeatures[np.ndarray], max_n_agents: int) -> MultiAgentFeatures[np.ndarray]:
-#     return MultiAgentFeatures(
-#         gt_states=force_pad_batch_size(agent_features.gt_states, max_n_agents),
-#         gt_states_avails=force_pad_batch_size(agent_features.gt_states_avails, max_n_agents),
-#         actor_type=force_pad_batch_size(agent_features.actor_type, max_n_agents),
-#         is_sdc=force_pad_batch_size(agent_features.is_sdc, max_n_agents),
-#     )
-    
-# def transform_with_se3_inplace(source_agent_features: MultiAgentFeatures[np.ndarray], transform: np.ndarray) -> MultiAgentFeatures[np.ndarray]:
-#     rotation = get_so2_from_se2(transform)  # type: ignore
-#     relative_yaw = get_yaw_from_se2(transform)  # type: ignore
-
-#     avails = agent_features.gt_states_avails
-
-#     gt_positions = agent_features.gt_states[avails, :2]
-#     gt_velocities = agent_features.gt_states[avails, 5:7]
-#     agent_features.gt_states[avails, :2] = transform_points(gt_positions, transform)
-#     agent_features.gt_states[avails, 5:7] = transform_points(gt_velocities, rotation)
-#     agent_features.gt_states[avails, 4] += relative_yaw
-    
-    
-    
 
 # def generate_roadgraph_features_dict(
 #     roadgraph_features: RoadGraphSampleFeatures[np.ndarray],
@@ -162,7 +141,8 @@ class WaymoDatasetHelper(object):
             gt_states=gt_states.astype(np.float32),
             gt_states_avails=gt_states_avails.astype(np.bool_),
             actor_type=decoded_example["state/type"].astype(np.intp),
-            is_sdc=decoded_example["state/is_sdc"].astype(np.bool_),
+            is_sdc=(decoded_example["state/is_sdc"] > 0).squeeze().astype(np.bool_),
+            tracks_to_predict=(decoded_example["state/tracks_to_predict"] > 0).squeeze().astype(np.bool_),
         )
 
 
@@ -354,16 +334,16 @@ def _parse_roadgraph_features(
 
 
 def _generate_features(
-    decoded_example: Dict[str, np.ndarray], max_n_agents=MAX_NUM_AGENTS
+    decoded_example: Dict[str, np.ndarray], train_with_tracks_to_predict: bool = False
 ) -> Dict[str, np.ndarray]:
-    # The sdc is also considered so that we can retrieve its features
-    tracks_to_predict = (decoded_example["state/tracks_to_predict"].squeeze() > 0).astype(np.bool_)
-    is_sdc_mask = (decoded_example["state/is_sdc"].squeeze() > 0).astype(np.bool_)
-    # tracks_to_predict = np.logical_or(tracks_to_predict, is_sdc_mask)
-
     agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
+    
+    # Mask everything to only keep tracks to predict and ego
+    if train_with_tracks_to_predict:
+        tracks_and_ego_mask = np.logical_or(agent_features.tracks_to_predict, agent_features.is_sdc)
+        agent_features.filter_with_mask(tracks_and_ego_mask)
+     
     # # Now remove the unwanted agents by filtering with tracks to predict
-    # agent_features.filter_with_mask(tracks_to_predict)
     agent_features_current_state = agent_features.gt_states[:, NUM_HISTORY_FRAMES]
 
     # Transform the scene to have the ego vehicle at the origin
@@ -376,22 +356,12 @@ def _generate_features(
 
     valid_positions = agent_features.gt_states[agent_features.gt_states_avails][:, :2]
     map_features = _parse_roadgraph_features(decoded_example, to_sdc_se3, valid_positions)
-
-    # Now pad the remaining agents to the max number of agents, needed to have tensors the same size.
-    # We also add 1 to the max number of agents to account for the ego vehicle
-    agent_features.force_pad_batch_size(max_n_agents)
     
-    features = agent_features.__dict__
-
-    TO_PREDICT = 8
-    agent_features.filter_with_mask(tracks_to_predict)
-    agent_features.force_pad_batch_size(TO_PREDICT)
+    if train_with_tracks_to_predict:
+        MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
+        agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
     
-    features["predict/gt_states"] = agent_features.gt_states
-    features["predict/gt_states_avails"] = agent_features.gt_states_avails 
-    features["predict/actor_type"] = agent_features.actor_type
-    
-    return features, map_features
+    return agent_features.__dict__, map_features
 
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
@@ -462,7 +432,7 @@ class WaymoH5Dataset(Dataset):
         data_fetched.update(
             parse_concatenated_tensor(roadgraph_merged_features, ROADGRAPH_FEATURES)
         )
-        return _generate_features(data_fetched)
+        return _generate_features(data_fetched, train_with_tracks_to_predict=False)
 
     def __del__(self):
         if self.dataset is not None:
