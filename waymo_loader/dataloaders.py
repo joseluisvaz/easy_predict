@@ -314,8 +314,8 @@ def _parse_roadgraph_features(
     return {
         "roadgraph_features": features,
         "roadgraph_features_mask": _nest_and_pad(masks, torch.bool, False),
-        "roadgraph_features_types": _nest_and_pad(chopped_types, torch.int16, False),
-        "roadgraph_features_ids": _nest_and_pad(chopped_ids, torch.int16, False),
+        "roadgraph_features_types": _nest_and_pad(chopped_types, torch.int64, 0), # int64 because it has to be used as an index
+        "roadgraph_features_ids": _nest_and_pad(chopped_ids, torch.int16, 0),
     }
 
 def _generate_features(

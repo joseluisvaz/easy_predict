@@ -95,6 +95,7 @@ class LightningModule(L.LightningModule):
             batch["actor_type"],
             batch["roadgraph_features"],
             batch["roadgraph_features_mask"],
+            batch["roadgraph_features_types"],
         )
 
         # Crop the future positions to match the number of timesteps
@@ -116,6 +117,9 @@ class LightningModule(L.LightningModule):
         ).bool()[
             ..., 0
         ]  # batch, polyline, points
+        
+        _, n_polyline, _ = map_avails.shape
+        self.log("map_sizes/polyline", n_polyline)
 
         percentage = map_avails.sum().float() / map_avails.numel()
         self.log("map_availability_percentage", percentage)

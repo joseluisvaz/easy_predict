@@ -123,6 +123,22 @@ def concatenate_historical_features(history_states: torch.Tensor, actor_types: t
     )
 
 
+def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
+    """Concatenate map_feats with one-hot encoded map types"""
+    n_batch, n_polylines, n_points, _ = map_feats.shape
+    types = map_types.view(n_batch, n_polylines, n_points)
+
+    NUM_CLASSES: T.Final = 20
+    types_one_hot = F.one_hot(types, num_classes=NUM_CLASSES).float()
+    return torch.cat(
+        [
+            map_feats,
+            types_one_hot,
+        ],
+        axis=-1,
+    )
+
+
 class Encoder(nn.Module):
     def __init__(self, input_size, hidden_size):
         super(Encoder, self).__init__()
@@ -144,21 +160,27 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size, n_timesteps):
+    INPUT_SIZE = 2  # x, y
+    OUTPUT_SIZE = 2  # dx, dy 
+
+    def __init__(self, hidden_size, n_timesteps):
         super(Decoder, self).__init__()
-        self.lstm_cell = MultiAgentLSTMCell(input_size, hidden_size)
-        self.linear = nn.Linear(hidden_size, output_size)
+        self.lstm_cell = MultiAgentLSTMCell(self.INPUT_SIZE, hidden_size)
+        self.linear = nn.Linear(hidden_size, self.OUTPUT_SIZE)
         self.n_timesteps = n_timesteps
 
-    def forward(self, current_positions, current_availabilities, hidden, context):
-        output = current_positions
+    def forward(self, current_features, current_availabilities, hidden, context):
+
+        current_state = current_features[..., :2]  # x, y
 
         outputs = []
         for t in range(self.n_timesteps):
-            hidden, context = self.lstm_cell(output, (hidden, context), current_availabilities)
-            delta_output = self.linear(hidden)
-            output = output + delta_output
-            outputs.append(output)
+            hidden, context = self.lstm_cell(
+                current_state, (hidden, context), current_availabilities
+            )
+            delta_state = self.linear(hidden)
+            current_state = current_state + delta_state
+            outputs.append(current_state)
 
         outputs = torch.stack(outputs, dim=2)
         return outputs
@@ -190,17 +212,16 @@ class MapPointNet(nn.Module):
 
 class PredictionModel(nn.Module):
 
-    XY_OUTPUT_SIZE = 2
     NUM_MCG_LAYERS = 4
     MAP_INPUT_SIZE = 20  # x, y, direction and one hot encoded type
 
     def __init__(self, input_features, hidden_size, n_timesteps):
         super(PredictionModel, self).__init__()
         self.encoder = Encoder(input_features, hidden_size)
-        self.decoder = Decoder(self.XY_OUTPUT_SIZE, hidden_size, self.XY_OUTPUT_SIZE, n_timesteps)
+        self.decoder = Decoder(hidden_size, n_timesteps)
 
         # Map parameters
-        self.polyline_adapter = nn.Linear(4, 128)
+        self.polyline_adapter = nn.Linear(24, 128)
         self.polyline_encoder = PolylineEncoder(128, n_layer=3, mlp_dropout_p=0.0)
 
         # Attention mechanisms
@@ -218,15 +239,17 @@ class PredictionModel(nn.Module):
         actor_types,
         roadgraph_features,
         roadgraph_features_mask,
+        roadgraph_types,
     ):
-
-        history_features = concatenate_historical_features(history_states, actor_types)
-
         # map_feats.shape is (batch, polyline, points, features)
         map_feats = torch.nested.to_padded_tensor(roadgraph_features, padding=0.0)
+        map_types = torch.nested.to_padded_tensor(roadgraph_types, padding=0)
         map_avails = torch.nested.to_padded_tensor(roadgraph_features_mask, padding=False).bool()[
             ..., 0
         ]
+
+        history_features = concatenate_historical_features(history_states, actor_types)
+        map_feats = concatenate_map_features(map_feats, map_types)
 
         polyline_avails = torch.any(map_avails, dim=2)
         map_invalid = ~map_avails
@@ -245,7 +268,7 @@ class PredictionModel(nn.Module):
         )
 
         # For now decoder only takes positions
-        current_positions = history_features[:, :, -1, :2]
+        current_features = history_features[:, :, -1]
         current_availabilities = history_availabilities[:, :, -1]
         attend_to_actors, _ = self.actor_interaction(
             hidden_actors,
@@ -254,6 +277,6 @@ class PredictionModel(nn.Module):
             key_padding_mask=~current_availabilities,
         )
         output = self.decoder(
-            current_positions, current_availabilities, attend_to_actors, context_actors
+            current_features, current_availabilities, attend_to_actors, context_actors
         )
         return output
