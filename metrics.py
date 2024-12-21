@@ -6,31 +6,32 @@ from waymo_open_dataset.protos import motion_metrics_pb2
 
 import tensorflow as tf
 from torch import Tensor as TorchTensor
+from waymo_loader.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES, SUBSAMPLE_SEQUENCE 
 
 
 def _default_metrics_config():
     config = motion_metrics_pb2.MotionMetricsConfig()
     config_text = """
-        track_steps_per_second: 10
-        prediction_steps_per_second: 10
-        track_history_samples: 10
-        track_future_samples: 80
+        track_steps_per_second: 5
+        prediction_steps_per_second: 5
+        track_history_samples: 5
+        track_future_samples: 40
         speed_lower_bound: 1.4
         speed_upper_bound: 11.0
         speed_scale_lower: 0.5
         speed_scale_upper: 1.0
         step_configurations {
-          measurement_step: 10
+          measurement_step: 5
           lateral_miss_threshold: 1.0
           longitudinal_miss_threshold: 2.0
         }
         step_configurations {
-          measurement_step: 30
+          measurement_step: 15
           lateral_miss_threshold: 1.8
           longitudinal_miss_threshold: 3.6
         }
         step_configurations {
-          measurement_step: 79
+          measurement_step: 39
           lateral_miss_threshold: 3.0
           longitudinal_miss_threshold: 6.0
         }

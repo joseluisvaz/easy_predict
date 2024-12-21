@@ -21,13 +21,12 @@ from waymo_loader.feature_description import (
     ROADGRAPH_FEATURES,
     _ROADGRAPH_TYPE_TO_IDX,
     NUM_HISTORY_FRAMES,
+    SUBSAMPLE_SEQUENCE
 )
 
 # Define generic type for arrays so that we can inspect when our features
 # have numpy arrays or torch tensors
 Array = TypeVar("Array", np.ndarray, Tensor)
-
-MAX_NUM_AGENTS = 128
 
 
 @dataclass
@@ -135,6 +134,9 @@ class WaymoDatasetHelper(object):
             ],
             axis=1,
         ).astype(np.bool_)
+        
+        gt_states = gt_states[:, ::SUBSAMPLE_SEQUENCE]
+        gt_states_avails = gt_states_avails[:, ::SUBSAMPLE_SEQUENCE]
 
         # By convention velocities have one element less
         return MultiAgentFeatures(

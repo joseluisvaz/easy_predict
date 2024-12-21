@@ -1,8 +1,11 @@
 # Train arguments
-max_epochs: 20
+max_epochs: 30
 batch_size: 128
-learning_rate: 0.0002
 accumulate_grad_batches: 1
+learning_rate: 0.0002
+weight_decay: 0.01
+grad_norm_clip: 1000.0
+eta_min: 1.0E-5
 
 # Data arguments
 train_with_tracks_to_predict: False # instead of 128 elements use 8, False is standard WOMD training
@@ -14,4 +17,3 @@ loss_use_ego_vehicle_mask: False  # False is standard WOMD
 
 # Model arguments
 hidden_size: 128
-

@@ -22,17 +22,20 @@ from lightning.pytorch.tuner import Tuner
 from metrics import MotionMetrics, _default_metrics_config
 from metrics_callback import OnTrainCallback
 from torch import Tensor
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from lightning.pytorch.callbacks import ModelCheckpoint
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
 from models.prediction import PredictionModel
 from waymo_loader.feature_description import (
     NUM_HISTORY_FRAMES,
     NUM_FUTURE_FRAMES,
+    SUBSAMPLE_SEQUENCE,
 )
-
 
 plt.style.use("dark_background")
 torch.set_float32_matmul_precision("medium")
+
+LR_FIND = False
 
 
 def compute_loss(
@@ -72,7 +75,7 @@ class LightningModule(L.LightningModule):
         self.data_dir = data_dir
         self.fast_dev_run = fast_dev_run
         self.learning_rate = hyperparameters.learning_rate
-        self.n_timesteps = 80
+        self.n_timesteps = NUM_FUTURE_FRAMES
         self.batch_size = hyperparameters.batch_size
         self.model = PredictionModel(
             input_features=12,
@@ -169,8 +172,13 @@ class LightningModule(L.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        return optimizer
+        optimizer = torch.optim.AdamW(
+            self.parameters(), lr=self.learning_rate, weight_decay=self.hyperparameters.weight_decay
+        )
+        scheduler = CosineAnnealingLR(optimizer,
+                              T_max=self.hyperparameters.max_epochs * len(self.train_dataloader()),
+                              eta_min=self.hyperparameters.eta_min)
+        return [optimizer], [scheduler]
 
     def train_dataloader(self):
         dataset = WaymoH5Dataset(self.data_dir, self.hyperparameters.train_with_tracks_to_predict)
@@ -226,12 +234,12 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
         callbacks=[metrics_callback, checkpoint_callback],
         accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
         profiler=SimpleProfiler(),
+        gradient_clip_val=hyperparameters.grad_norm_clip,
     )
-
-    LR_FIND = False 
+    
     if LR_FIND and not fast_dev_run:
         tuner = Tuner(trainer)
-        lr_finder = tuner.lr_find(module)
+        lr_finder = tuner.lr_find(module, min_lr=1e-6, max_lr=5e-2)
 
         fig = lr_finder.plot(suggest=True)
         fig.savefig("learning_rate.png")

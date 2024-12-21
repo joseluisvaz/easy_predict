@@ -3,8 +3,9 @@ from collections import OrderedDict
 
 import tensorflow as tf
 
-NUM_HISTORY_FRAMES = 10
-NUM_FUTURE_FRAMES = 80
+SUBSAMPLE_SEQUENCE = 2 # e.g. 2 means 5 Hz instead of 10Hz sampling
+NUM_HISTORY_FRAMES = 10 // SUBSAMPLE_SEQUENCE
+NUM_FUTURE_FRAMES = 80 // SUBSAMPLE_SEQUENCE
 
 _ROADGRAPH_TYPE_TO_IDX = {
     "LaneCenter-Freeway": 1,
