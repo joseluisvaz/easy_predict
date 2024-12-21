@@ -6,6 +6,7 @@ import tensorflow as tf
 SUBSAMPLE_SEQUENCE = 2 # e.g. 2 means 5 Hz instead of 10Hz sampling
 NUM_HISTORY_FRAMES = 10 // SUBSAMPLE_SEQUENCE
 NUM_FUTURE_FRAMES = 80 // SUBSAMPLE_SEQUENCE
+NUM_MAP_SAMPLES = 30000
 
 _ROADGRAPH_TYPE_TO_IDX = {
     "LaneCenter-Freeway": 1,
@@ -84,17 +85,17 @@ ROADGRAPH_FEATURES = OrderedDict(
     [
         (
             "roadgraph_samples/dir",
-            tf.io.FixedLenFeature([20000, 3], tf.float32, default_value=None),
+            tf.io.FixedLenFeature([NUM_MAP_SAMPLES, 3], tf.float32, default_value=None),
         ),
-        ("roadgraph_samples/id", tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None)),
-        ("roadgraph_samples/type", tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None)),
+        ("roadgraph_samples/id", tf.io.FixedLenFeature([NUM_MAP_SAMPLES, 1], tf.int64, default_value=None)),
+        ("roadgraph_samples/type", tf.io.FixedLenFeature([NUM_MAP_SAMPLES, 1], tf.int64, default_value=None)),
         (
             "roadgraph_samples/valid",
-            tf.io.FixedLenFeature([20000, 1], tf.int64, default_value=None),
+            tf.io.FixedLenFeature([NUM_MAP_SAMPLES, 1], tf.int64, default_value=None),
         ),
         (
             "roadgraph_samples/xyz",
-            tf.io.FixedLenFeature([20000, 3], tf.float32, default_value=None),
+            tf.io.FixedLenFeature([NUM_MAP_SAMPLES, 3], tf.float32, default_value=None),
         ),
     ]
 )

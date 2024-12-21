@@ -68,11 +68,10 @@ MAX_PREDICT_AGENTS = 8
 
 
 class LightningModule(L.LightningModule):
-    def __init__(self, data_dir: str, fast_dev_run: bool, hyperparameters: DictConfig):
+    def __init__(self, fast_dev_run: bool, hyperparameters: DictConfig):
         super().__init__()
         self.save_hyperparameters()
         self.task = task
-        self.data_dir = data_dir
         self.fast_dev_run = fast_dev_run
         self.learning_rate = hyperparameters.learning_rate
         self.n_timesteps = NUM_FUTURE_FRAMES
@@ -150,10 +149,7 @@ class LightningModule(L.LightningModule):
 
     def training_step(self, batch, batch_idx):
 
-        predicted_positions, loss = self._inference_and_loss(batch)
-
-        with torch.no_grad():
-            self._update_metrics(batch, predicted_positions)
+        _, loss = self._inference_and_loss(batch)
 
         # Compute the percentarge of elements in the map that are available, this ia metric that tells us
         # how empty the tensors are
@@ -166,22 +162,36 @@ class LightningModule(L.LightningModule):
         _, n_polyline, _ = map_avails.shape
         self.log("map_sizes/polyline", n_polyline)
 
+        optimizer = self.optimizers()
+        lr = optimizer.param_groups[0]["lr"]
+        self.log("lr", lr)
+
         percentage = map_avails.sum().float() / map_avails.numel()
         self.log("map_availability_percentage", percentage)
         self.log("loss/train", loss)
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        with torch.no_grad():
+            predicted_positions, loss = self._inference_and_loss(batch)
+            self._update_metrics(batch, predicted_positions)
+            self.log("loss/val", loss)
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.learning_rate, weight_decay=self.hyperparameters.weight_decay
         )
-        scheduler = CosineAnnealingLR(optimizer,
-                              T_max=self.hyperparameters.max_epochs * len(self.train_dataloader()),
-                              eta_min=self.hyperparameters.eta_min)
+        scheduler = CosineAnnealingLR(
+            optimizer,
+            T_max=self.hyperparameters.max_epochs * len(self.train_dataloader()),
+            eta_min=self.hyperparameters.eta_min,
+        )
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
-        dataset = WaymoH5Dataset(self.data_dir, self.hyperparameters.train_with_tracks_to_predict)
+        dataset = WaymoH5Dataset(
+            self.hyperparameters.train_dataset, self.hyperparameters.train_with_tracks_to_predict
+        )
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
@@ -194,8 +204,24 @@ class LightningModule(L.LightningModule):
             collate_fn=collate_waymo,
         )
 
+    def val_dataloader(self):
+        dataset = WaymoH5Dataset(
+            self.hyperparameters.val_dataset, self.hyperparameters.train_with_tracks_to_predict
+        )
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            num_workers=self.hyperparameters.num_workers,
+            shuffle=False,
+            persistent_workers=True if not self.fast_dev_run else False,
+            pin_memory=False,
+            drop_last=True,
+            prefetch_factor=4 if not self.fast_dev_run else None,
+            collate_fn=collate_waymo,
+        )
 
-def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
+
+def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
@@ -204,11 +230,10 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
 
     # Load if a checkpoint is provided
     module = (
-        LightningModule(data_dir, fast_dev_run, hyperparameters)
+        LightningModule(fast_dev_run, hyperparameters)
         if not ckpt_path
         else LightningModule.load_from_checkpoint(
             ckpt_path,
-            data_dir=data_dir,
             fast_dev_run=fast_dev_run,
             hyperparameters=hyperparameters,
             map_location="cpu",
@@ -217,13 +242,15 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
 
     checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/",
-        filename="model-{epoch:02d}-{loss/train:.2f}",
-        monitor="loss/train",
+        filename="model-{epoch:02d}-{loss/val:.2f}",
+        monitor="loss/val",
         mode="min",
         save_top_k=1,
         verbose=True,
     )
-    metrics_callback = OnTrainCallback(data_dir, hyperparameters.train_with_tracks_to_predict)
+    metrics_callback = OnTrainCallback(
+        hyperparameters.val_dataset, hyperparameters.train_with_tracks_to_predict
+    )
 
     trainer = L.Trainer(
         max_epochs=hyperparameters.max_epochs,
@@ -236,7 +263,7 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
         profiler=SimpleProfiler(),
         gradient_clip_val=hyperparameters.grad_norm_clip,
     )
-    
+
     if LR_FIND and not fast_dev_run:
         tuner = Tuner(trainer)
         lr_finder = tuner.lr_find(module, min_lr=1e-6, max_lr=5e-2)
@@ -252,9 +279,6 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
 
 def _parse_arguments() -> Namespace:
     parser = ArgumentParser(allow_abbrev=True)
-    parser.add_argument(
-        "--data-dir", type=str, required=True, help="Path to the folder with the tf records."
-    )
     parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
     parser.add_argument("--gpu", action="store_true", help="Use GPU")
     parser.add_argument("--ckpt", required=False, type=str, help="Checkpoint file")
@@ -263,4 +287,4 @@ def _parse_arguments() -> Namespace:
 
 if __name__ == "__main__":
     args = _parse_arguments()
-    main(args.data_dir, args.fast_dev_run, args.gpu, args.ckpt)
+    main(args.fast_dev_run, args.gpu, args.ckpt)

@@ -64,7 +64,7 @@ class OnTrainCallback(L.Callback):
             collate_fn=collate_waymo,
         )
 
-    def on_train_epoch_end(self, trainer, pl_module):
+    def on_validation_epoch_end(self, trainer, pl_module):
         for idx, single_sample_batch in enumerate(
             itertools.islice(self._dataloader, 10, 10 + self._n_samples)
         ):
