@@ -36,22 +36,9 @@ def process_roadgraph_features(decoded_example: T.Dict[str, np.ndarray]) -> np.n
 def process_merged_agent_features(decoded_example: T.Dict[str, np.ndarray]) -> np.ndarray:
     """Merge the agent features into a single numpy array."""
     processed_example = {}
-    # track_mask = numpy_example["state/tracks_to_predict"] > 0
-    # sdc_mask = numpy_example["state/is_sdc"] > 0
-    # mask = track_mask & sdc_mask
     for key, value in decoded_example.items():
         if key not in STATE_FEATURES:
             continue
-
-        # cropped_value = value[mask]
-        # # Pad the cropped value to max_agents
-        # if cropped_value.shape[0] < max_agents:
-        #     padding = ((0, max_agents - cropped_value.shape[0]),) + ((0, 0),) * (
-        #         cropped_value.ndim - 1
-        #     )
-        #     padded_value = np.pad(cropped_value, padding, mode="constant", constant_values=0)
-        # else:
-        #     padded_value = cropped_value[:max_agents]
 
         # For the features with a single dimension, add an extra for concatenation
         if len(value.shape) == 1:

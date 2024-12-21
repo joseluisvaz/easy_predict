@@ -35,9 +35,28 @@ plt.style.use("dark_background")
 torch.set_float32_matmul_precision("medium")
 
 
-def compute_loss(predicted_positions, target_positions, target_availabilities):
+def compute_loss(
+    predicted_positions: torch.Tensor,
+    target_positions: torch.Tensor,
+    target_availabilities: torch.Tensor,
+    tracks_to_predict_mask: torch.Tensor,
+    is_sdc: torch.Tensor,
+    loss_tracks_to_predict_mask: bool,
+    loss_use_ego_vehicle_mask: bool,
+):
+
+    total_mask = target_availabilities
+
+    # Use masks to hide agents out
+    if loss_use_ego_vehicle_mask and loss_tracks_to_predict_mask:
+        total_mask *= tracks_to_predict_mask.unsqueeze(-1) | is_sdc.unsqueeze(-1)
+    elif loss_use_ego_vehicle_mask:
+        total_mask *= is_sdc.unsqueeze(-1)
+    elif loss_tracks_to_predict_mask:
+        total_mask *= tracks_to_predict_mask.unsqueeze(-1)
+
     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
-    return torch.mean(errors * target_availabilities)
+    return torch.mean(errors * total_mask)
 
 
 task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
@@ -60,6 +79,7 @@ class LightningModule(L.LightningModule):
             hidden_size=hyperparameters.hidden_size,
             n_timesteps=self.n_timesteps,
         )
+        self.hyperparameters = hyperparameters
 
         self.metrics_config = _default_metrics_config()
         self.metrics = MotionMetrics(self.metrics_config)
@@ -114,7 +134,15 @@ class LightningModule(L.LightningModule):
         # Crop the future positions to match the number of timesteps
         future_positions = batch["gt_states"][:, :, -NUM_FUTURE_FRAMES:, :2]
         future_availabilities = batch["gt_states_avails"][:, :, -NUM_FUTURE_FRAMES:]
-        loss = compute_loss(predicted_positions, future_positions, future_availabilities)
+        loss = compute_loss(
+            predicted_positions,
+            future_positions,
+            future_availabilities,
+            batch["tracks_to_predict"],
+            batch["is_sdc"],
+            self.hyperparameters.loss_tracks_to_predict_mask,
+            self.hyperparameters.loss_use_ego_vehicle_mask,
+        )
         return predicted_positions, loss
 
     def training_step(self, batch, batch_idx):
@@ -145,11 +173,11 @@ class LightningModule(L.LightningModule):
         return optimizer
 
     def train_dataloader(self):
-        dataset = WaymoH5Dataset(self.data_dir)
+        dataset = WaymoH5Dataset(self.data_dir, self.hyperparameters.train_with_tracks_to_predict)
         return DataLoader(
             dataset,
             batch_size=self.batch_size,
-            num_workers=8,
+            num_workers=self.hyperparameters.num_workers,
             shuffle=True,
             persistent_workers=True if not self.fast_dev_run else False,
             pin_memory=False,
@@ -187,7 +215,7 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
         save_top_k=1,
         verbose=True,
     )
-    metrics_callback = OnTrainCallback(data_dir)
+    metrics_callback = OnTrainCallback(data_dir, hyperparameters.train_with_tracks_to_predict)
 
     trainer = L.Trainer(
         max_epochs=hyperparameters.max_epochs,
@@ -200,7 +228,7 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
         profiler=SimpleProfiler(),
     )
 
-    LR_FIND = False
+    LR_FIND = False 
     if LR_FIND and not fast_dev_run:
         tuner = Tuner(trainer)
         lr_finder = tuner.lr_find(module)
@@ -209,6 +237,7 @@ def main(data_dir: str, fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional
         fig.savefig("learning_rate.png")
         new_lr = lr_finder.suggestion()
         print("LEARNING RATE SUGGESTION: ", new_lr)
+        assert False, "Terminate the program to avoid training"
 
     trainer.fit(model=module)
 

@@ -406,11 +406,12 @@ def parse_concatenated_tensor(
 
 
 class WaymoH5Dataset(Dataset):
-    def __init__(self, filepath: str):
+    def __init__(self, filepath: str, train_with_tracks_to_predict: bool):
         """Do not open the h5 file here"""
         self.dataset: Optional[h5py.File] = None
         self.feature_description = STATE_FEATURES
         self.filepath = filepath
+        self.train_with_tracks_to_predict = train_with_tracks_to_predict
 
         # Open and close dataset just to extract the length
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
@@ -432,7 +433,7 @@ class WaymoH5Dataset(Dataset):
         data_fetched.update(
             parse_concatenated_tensor(roadgraph_merged_features, ROADGRAPH_FEATURES)
         )
-        return _generate_features(data_fetched, train_with_tracks_to_predict=False)
+        return _generate_features(data_fetched, train_with_tracks_to_predict=self.train_with_tracks_to_predict)
 
     def __del__(self):
         if self.dataset is not None:

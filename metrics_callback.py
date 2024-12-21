@@ -51,11 +51,11 @@ def plot_oriented_box(ax, x, y, orientation, length, width, color="blue", alpha=
 
 
 class OnTrainCallback(L.Callback):
-    def __init__(self, datadir: str):
+    def __init__(self, datadir: str, train_with_tracks_to_predict: bool):
         super().__init__()
 
         self._n_samples = 5
-        dataset = WaymoH5Dataset(datadir)
+        dataset = WaymoH5Dataset(datadir, train_with_tracks_to_predict=train_with_tracks_to_predict)
         self._dataloader = DataLoader(
             dataset,
             batch_size=1,
