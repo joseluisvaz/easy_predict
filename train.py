@@ -153,11 +153,7 @@ class LightningModule(L.LightningModule):
 
         # Compute the percentarge of elements in the map that are available, this ia metric that tells us
         # how empty the tensors are
-        map_avails = torch.nested.to_padded_tensor(
-            batch["roadgraph_features_mask"], padding=False
-        ).bool()[
-            ..., 0
-        ]  # batch, polyline, points
+        map_avails = batch["roadgraph_features_mask"]
 
         _, n_polyline, _ = map_avails.shape
         self.log("map_sizes/polyline", n_polyline)
@@ -262,8 +258,8 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
         accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
         profiler=SimpleProfiler(),
         gradient_clip_val=hyperparameters.grad_norm_clip,
-        # limit_train_batches=0.1,
-        # limit_val_batches=0.1,
+        limit_train_batches=0.1,
+        limit_val_batches=0.1,
     )
 
     if LR_FIND and not fast_dev_run:

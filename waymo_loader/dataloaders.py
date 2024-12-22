@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Generic, TypeVar, Final
+import typing as T
 from collections import OrderedDict
+import warnings
 
 import h5py
 import numpy as np
@@ -8,6 +10,8 @@ import torch
 from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
+import torch.nn.functional as F
+
 
 from common_utils.geometry import (
     transform_points,
@@ -23,6 +27,46 @@ from waymo_loader.feature_description import (
     NUM_HISTORY_FRAMES,
     SUBSAMPLE_SEQUENCE
 )
+
+ROADGRAPH_TYPES_OF_INTEREST: Final = {
+    "LaneCenter-Freeway",
+    "LaneCenter-SurfaceStreet",
+    "LaneCenter-BikeLane",
+    "RoadLine-BrokenSingleWhite",
+    "RoadLine-SolidSingleWhite",
+    "RoadLine-SolidDoubleWhite",
+    "RoadLine-BrokenSingleYellow",
+    "RoadLine-BrokenDoubleYellow",
+    "Roadline-SolidSingleYellow",
+    "Roadline-SolidDoubleYellow",
+    "RoadLine-PassingDoubleYellow",
+    "RoadEdgeBoundary",
+    "RoadEdgeMedian",
+    "StopSign",
+    "Crosswalk",
+    "SpeedBump",
+}
+
+ROADGRAPH_TYPES_TO_SUBSAMPLE = [
+    "LaneCenter-Freeway",
+    "LaneCenter-SurfaceStreet",
+    "LaneCenter-BikeLane",
+    "RoadLine-BrokenSingleWhite",
+    "RoadLine-SolidSingleWhite",
+    "RoadLine-SolidDoubleWhite",
+    "RoadLine-BrokenSingleYellow",
+    "RoadLine-BrokenDoubleYellow",
+    "Roadline-SolidSingleYellow",
+    "Roadline-SolidDoubleYellow",
+    "RoadLine-PassingDoubleYellow",
+    "RoadEdgeBoundary",
+    "RoadEdgeMedian",
+]
+
+MAX_NUM_POLYLINES: Final = 800
+SUBSAMPLE_POLYLINE: T.Final = 4
+MAX_POLYLINE_LENGTH: T.Final = 20
+
 
 # Define generic type for arrays so that we can inspect when our features
 # have numpy arrays or torch tensors
@@ -64,39 +108,6 @@ class MultiAgentFeatures(Generic[Array]):
         self.gt_states[avails, :2] = transform_points(gt_positions, transform)
         self.gt_states[avails, 5:7] = transform_points(gt_velocities, rotation)
         self.gt_states[avails, 4] += relative_yaw
-
-# def features_filter_with_mask_inplace(agent_features: MultiAgentFeatures[np.ndarray], mask: np.ndarray) -> None:
-#     agent_features.gt_states = agent_features.gt_states[mask]
-#     agent_features.gt_states_avails = agent_features.gt_states_avails[mask]
-#     agent_features.actor_type = agent_features.actor_type[mask]
-#     agent_features.is_sdc = agent_features.is_sdc[mask]
-
-
-# def generate_roadgraph_features_dict(
-#     roadgraph_features: RoadGraphSampleFeatures[np.ndarray],
-# ) -> np.ndarray:
-
-#     # TODO: Implement the traffic lights parsing
-#     # if config.model_params.use_traffic_lights:
-#     #     traffic_lights_features = utils.one_hot_numpy_adaptor(
-#     #         dataset_output.roadgraph_features.roadgraph_tl_status, config.model_params.n_traffic_light_status_types
-#     #     )
-#     #     features.append(traffic_lights_features)
-
-#     # The numerical values are not contiguous, we remap them to an ordered sequence of integers
-#     mapping_fn = np.vectorize(lambda a: _ROADGRAPH_SAMPLE_TYPE_MAP_RESAMPLED.get(a, a))
-#     ordinal_values = mapping_fn(roadgraph_features.map_elements_type_idx.astype(int))
-
-#     # Numpy does not have a one hot encoding function, we use pytorch to do it.
-#     n_types = len(list(_ROADGRAPH_SAMPLE_TYPE_MAP_RESAMPLED))
-#     one_hot_encoded = F.one_hot(torch.from_numpy(ordinal_values), n_types).numpy()
-
-#     features = [
-#         roadgraph_features.roadgraph_xy,
-#         roadgraph_features.roadgraph_dir,
-#         one_hot_encoded,
-#     ]
-#     return np.concatenate(features, -1)
 
 
 class WaymoDatasetHelper(object):
@@ -142,46 +153,26 @@ class WaymoDatasetHelper(object):
         return MultiAgentFeatures(
             gt_states=gt_states.astype(np.float32),
             gt_states_avails=gt_states_avails.astype(np.bool_),
-            actor_type=decoded_example["state/type"].astype(np.intp),
+            actor_type=decoded_example["state/type"].squeeze().astype(np.intp),
             is_sdc=(decoded_example["state/is_sdc"] > 0).squeeze().astype(np.bool_),
             tracks_to_predict=(decoded_example["state/tracks_to_predict"] > 0).squeeze().astype(np.bool_),
         )
 
 
-ROADGRAPH_TYPES_OF_INTEREST: Final = {
-    "LaneCenter-Freeway",
-    "LaneCenter-SurfaceStreet",
-    "LaneCenter-BikeLane",
-    "RoadLine-BrokenSingleWhite",
-    "RoadLine-SolidSingleWhite",
-    "RoadLine-SolidDoubleWhite",
-    "RoadLine-BrokenSingleYellow",
-    "RoadLine-BrokenDoubleYellow",
-    "Roadline-SolidSingleYellow",
-    "Roadline-SolidDoubleYellow",
-    "RoadLine-PassingDoubleYellow",
-    "RoadEdgeBoundary",
-    "RoadEdgeMedian",
-    "StopSign",
-    "Crosswalk",
-    "SpeedBump",
-}
 
-ROADGRAPH_TYPES_TO_SUBSAMPLE = [
-    "LaneCenter-Freeway",
-    "LaneCenter-SurfaceStreet",
-    "LaneCenter-BikeLane",
-    "RoadLine-BrokenSingleWhite",
-    "RoadLine-SolidSingleWhite",
-    "RoadLine-SolidDoubleWhite",
-    "RoadLine-BrokenSingleYellow",
-    "RoadLine-BrokenDoubleYellow",
-    "Roadline-SolidSingleYellow",
-    "Roadline-SolidDoubleYellow",
-    "RoadLine-PassingDoubleYellow",
-    "RoadEdgeBoundary",
-    "RoadEdgeMedian",
-]
+def pad_or_trim_first_dimension(tensor: np.array, value: Any) -> np.ndarray:
+    """Pads or trims an array to a specific size."""
+    
+    ndim = tensor.ndim
+    assert ndim > 0
+    
+    if tensor.shape[0] < MAX_NUM_POLYLINES:
+        padding = MAX_NUM_POLYLINES - tensor.shape[0]
+        padding_sequence = [(0, padding)] + [(0, 0)] * (ndim - 1)
+        padded_tensor = np.pad(tensor, padding_sequence, mode="constant", constant_values=value)
+        return padded_tensor
+    warnings.warn("Trimming the tensor to the maximum number of polylines")
+    return tensor[:MAX_NUM_POLYLINES]
 
 
 def get_bounding_box(polyline: np.ndarray) -> np.ndarray:
@@ -293,73 +284,53 @@ def _parse_roadgraph_features(
         indices = np.concatenate(([0], indices, [len(sequence) - 1]))
         return sequence[indices]
 
-    SUBSAMPLE: T.Final = 4
-    MAX_POLYLINE_LENGTH: T.Final = 20
     ROADGRAPH_IDX_TO_SUBSAMPLE = {
         _ROADGRAPH_TYPE_TO_IDX[_type] for _type in ROADGRAPH_TYPES_TO_SUBSAMPLE
     }
 
-    # def _select_and_decompose_sequences(flattened_sequences: np.ndarray, types: np.ndarray):
-    #     """Select the unique ids and decompose the polylines into smaller pieces"""
-        # decomposed = []
-        # for id in unique_ids:
-        #     indices = valid_ids == id
-        #     polyline_type = types[indices][0]  # Get the type of this polyline
-        #     subsample_factor = SUBSAMPLE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
+    def _select_and_decompose_sequences(flattened_sequences: np.ndarray, types: np.ndarray):
+        """Select the unique ids and decompose the polylines into smaller pieces"""
+        decomposed = []
+        for id in unique_ids:
+            indices = valid_ids == id
+            polyline_type = types[indices][0]  # Get the type of this polyline
+            subsample_factor = SUBSAMPLE_POLYLINE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
             
-        #     subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
-        #     for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
-        #         decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
-    #     return decomposed
+            subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
+            for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
+                decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
+        return decomposed
 
-    # chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
-    # chopped_dirs = _select_and_decompose_sequences(valid_dirs, valid_types)
-    # chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
-    # chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
-
-    chopped_polylines = []
-    chopped_dirs = []
-    chopped_types = []
-    chopped_ids = []
-    for id in unique_ids:
-        indices = valid_ids == id
-        
-        selected_polylines = valid_points[indices]
-        selected_dirs = valid_dirs[indices]
-        selected_types = valid_types[indices]
-        selected_ids = valid_ids[indices]
-
-        polyline_type = selected_types[0]  # Get the type of this polyline
-        
-        subsample_factor = SUBSAMPLE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
-
-        def _subsample_and_append(sequence: np.ndarray, sequence_to_append_to: List[np.ndarray]):        
-            sampled = _subsample_sequence(sequence, subsample_factor)
-            for i in range(0, len(sampled), MAX_POLYLINE_LENGTH):
-                sequence_to_append_to.append(sampled[i : i + MAX_POLYLINE_LENGTH])
-        
-        _subsample_and_append(selected_polylines, chopped_polylines)
-        _subsample_and_append(selected_dirs, chopped_dirs)
-        _subsample_and_append(selected_types, chopped_types)
-        _subsample_and_append(selected_ids, chopped_ids)
-
+    chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
+    chopped_dirs = _select_and_decompose_sequences(valid_dirs, valid_types)
+    chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
+    chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
 
-    def _nest_and_pad(tensor: np.ndarray, torch_type: Any, padding: Any) -> np.ndarray:
-        nested_tensor = torch.nested.nested_tensor(tensor, dtype=torch_type)
-        return torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
+
+    def _nest_and_pad(tensor_sequence: List[np.ndarray], torch_type: Any, padding: Any) -> np.ndarray:
+        # Create a max size sensor to make the padding valid, we can remove it at the end
+        dummy_tensor = torch.zeros((MAX_POLYLINE_LENGTH, *tensor_sequence[0].shape[1:]), dtype=torch_type)
+        tensor_sequence.append(dummy_tensor)
+        
+        nested_tensor = torch.nested.nested_tensor(tensor_sequence, dtype=torch_type)
+        padded_tensor = torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
+
+        # Remove the dummy tensor
+        return padded_tensor[:-1] 
 
     chopped_polylines = _nest_and_pad(chopped_polylines, torch.float, 0.0)
     chopped_dirs = _nest_and_pad(chopped_dirs, torch.float, 0.0)
     features = np.concatenate((chopped_polylines, chopped_dirs), axis=-1)
-
+    masks = _nest_and_pad(masks, torch.bool, False)
+    chopped_types = _nest_and_pad(chopped_types, torch.int64, 0)
+    chopped_ids = _nest_and_pad(chopped_ids, torch.int16, 0)
+    
     return {
-        "roadgraph_features": features,
-        "roadgraph_features_mask": _nest_and_pad(masks, torch.bool, False),
-        "roadgraph_features_types": _nest_and_pad(
-            chopped_types, torch.int64, 0
-        ),  # int64 because it has to be used as an index
-        "roadgraph_features_ids": _nest_and_pad(chopped_ids, torch.int16, 0),
+        "roadgraph_features": pad_or_trim_first_dimension(features, 0.0),
+        "roadgraph_features_mask": pad_or_trim_first_dimension(masks, False).squeeze(),
+        "roadgraph_features_types": pad_or_trim_first_dimension(chopped_types, 0),
+        "roadgraph_features_ids": pad_or_trim_first_dimension(chopped_ids, 0),
     }
 
 
@@ -391,27 +362,23 @@ def _generate_features(
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
     
-    return agent_features.__dict__, map_features
+    return {
+        "gt_states": agent_features.gt_states.astype(np.float32), # [N_AGENTS, TIME, FEATS]
+        "gt_states_avails": agent_features.gt_states_avails.astype(np.bool_), # [N_AGENTS, TIME]
+        "actor_type": agent_features.actor_type.astype(np.int64), # [N_AGENTS,]
+        "is_sdc": agent_features.is_sdc.astype(np.bool_), # [N_AGENTS,]
+        "tracks_to_predict": agent_features.tracks_to_predict.astype(np.bool_), # [N_AGENTS,]
+        "roadgraph_features": map_features["roadgraph_features"].astype(np.float32), # [N_POLYLINE, N_POINTS, FEATS]
+        "roadgraph_features_mask": map_features["roadgraph_features_mask"].astype(np.bool_), # [N_POLYLINE, N_POINTS]
+        "roadgraph_features_types": map_features["roadgraph_features_types"].astype(np.int64), # [N_POLYLINE, N_POINTS]
+        "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(np.int16), # [N_POLYLINE, N_POINTS]
+    }
 
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
-    # Maps should be collated differently (concatenated in the same dimension)
-    batch = dict()
-    batch.update(default_collate([value[0] for value in payloads]))
-
-    batch["roadgraph_features"] = torch.nested.nested_tensor(
-        [value[1]["roadgraph_features"] for value in payloads]
-    )
-    batch["roadgraph_features_mask"] = torch.nested.nested_tensor(
-        [value[1]["roadgraph_features_mask"] for value in payloads]
-    )
-    batch["roadgraph_features_types"] = torch.nested.nested_tensor(
-        [value[1]["roadgraph_features_types"] for value in payloads]
-    )
-    batch["roadgraph_features_ids"] = torch.nested.nested_tensor(
-        [value[1]["roadgraph_features_ids"] for value in payloads]
-    )
-    return default_convert(batch)
+    for key, value in payloads[0].items():
+        print(key, value.shape)
+    return default_convert(default_collate(payloads))
 
 
 def parse_concatenated_tensor(

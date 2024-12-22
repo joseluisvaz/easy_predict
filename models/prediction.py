@@ -243,11 +243,9 @@ class PredictionModel(nn.Module):
         roadgraph_types,
     ):
         # map_feats.shape is (batch, polyline, points, features)
-        map_feats = torch.nested.to_padded_tensor(roadgraph_features, padding=0.0)
-        map_types = torch.nested.to_padded_tensor(roadgraph_types, padding=0)
-        map_avails = torch.nested.to_padded_tensor(roadgraph_features_mask, padding=False).bool()[
-            ..., 0
-        ]
+        map_feats = roadgraph_features
+        map_types = roadgraph_types
+        map_avails = roadgraph_features_mask
 
         history_features = concatenate_historical_features(history_states, actor_types)
         map_feats = concatenate_map_features(map_feats, map_types)
