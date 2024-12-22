@@ -1,7 +1,7 @@
 from argparse import ArgumentParser, Namespace
 import warnings
 import typing as T
-from pytorch_lightning.profilers import SimpleProfiler 
+from pytorch_lightning.profilers import SimpleProfiler
 
 # Ignore the warning about nested tensors to not spam the terminal
 warnings.filterwarnings(
@@ -258,8 +258,8 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
         accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
         profiler=SimpleProfiler(),
         gradient_clip_val=hyperparameters.grad_norm_clip,
-        limit_train_batches=0.1,
-        limit_val_batches=0.1,
+        # limit_train_batches=0.1,
+        # limit_val_batches=0.1,
     )
 
     if LR_FIND and not fast_dev_run:

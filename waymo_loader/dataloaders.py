@@ -327,10 +327,10 @@ def _parse_roadgraph_features(
     chopped_ids = _nest_and_pad(chopped_ids, torch.int16, 0)
     
     return {
-        "roadgraph_features": pad_or_trim_first_dimension(features, 0.0),
-        "roadgraph_features_mask": pad_or_trim_first_dimension(masks, False).squeeze(),
-        "roadgraph_features_types": pad_or_trim_first_dimension(chopped_types, 0),
-        "roadgraph_features_ids": pad_or_trim_first_dimension(chopped_ids, 0),
+        "roadgraph_features": pad_or_trim_first_dimension(features, 0.0), # [N_POLYLINE, N_POINTS, FEATS]
+        "roadgraph_features_mask": pad_or_trim_first_dimension(masks, False).squeeze(), # [N_POLYLINE, N_POINTS]
+        "roadgraph_features_types": pad_or_trim_first_dimension(chopped_types, 0)[:, 0], # [N_POLYLINE,] # Only one type per polyline
+        "roadgraph_features_ids": pad_or_trim_first_dimension(chopped_ids, 0)[:, 0], # [N_POLYLINE,] # Only one id per polyline
     }
 
 
@@ -370,14 +370,12 @@ def _generate_features(
         "tracks_to_predict": agent_features.tracks_to_predict.astype(np.bool_), # [N_AGENTS,]
         "roadgraph_features": map_features["roadgraph_features"].astype(np.float32), # [N_POLYLINE, N_POINTS, FEATS]
         "roadgraph_features_mask": map_features["roadgraph_features_mask"].astype(np.bool_), # [N_POLYLINE, N_POINTS]
-        "roadgraph_features_types": map_features["roadgraph_features_types"].astype(np.int64), # [N_POLYLINE, N_POINTS]
-        "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(np.int16), # [N_POLYLINE, N_POINTS]
+        "roadgraph_features_types": map_features["roadgraph_features_types"].astype(np.int64), # [N_POLYLINE,]
+        "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(np.int16), # [N_POLYLINE,]
     }
 
 
 def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
-    for key, value in payloads[0].items():
-        print(key, value.shape)
     return default_convert(default_collate(payloads))
 
 

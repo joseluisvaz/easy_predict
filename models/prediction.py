@@ -111,10 +111,10 @@ def concatenate_historical_features(history_states: torch.Tensor, actor_types: t
     """Concatenate history states with one-hot encoded actor types"""
     n_batch, n_agents, n_past, _ = history_states.shape
     # clamp to 0, to remove instances of -1
-    types = actor_types.clamp_(min=0).view(n_batch, n_agents, 1)
+    types = actor_types.clamp_(min=0).view(n_batch, n_agents, 1).expand(-1, -1, n_past)
     
     NUM_CLASSES: T.Final = 5
-    types_one_hot = F.one_hot(types.expand(-1, -1, n_past), num_classes=NUM_CLASSES).float()
+    types_one_hot = F.one_hot(types, num_classes=NUM_CLASSES).float()
     return torch.cat(
         [
             history_states,
@@ -127,7 +127,7 @@ def concatenate_historical_features(history_states: torch.Tensor, actor_types: t
 def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
     """Concatenate map_feats with one-hot encoded map types"""
     n_batch, n_polylines, n_points, _ = map_feats.shape
-    types = map_types.view(n_batch, n_polylines, n_points)
+    types = map_types.view(n_batch, n_polylines, 1).expand(-1, -1, n_points)
 
     NUM_CLASSES: T.Final = 20
     types_one_hot = F.one_hot(types, num_classes=NUM_CLASSES).float()
