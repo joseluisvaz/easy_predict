@@ -299,22 +299,50 @@ def _parse_roadgraph_features(
         _ROADGRAPH_TYPE_TO_IDX[_type] for _type in ROADGRAPH_TYPES_TO_SUBSAMPLE
     }
 
-    def _select_and_decompose_sequences(flattened_sequences: np.ndarray, types: np.ndarray):
-        """Select the unique ids and decompose the polylines into smaller pieces"""
-        decomposed = []
-        for id in unique_ids:
-            indices = valid_ids == id
-            polyline_type = types[indices][0]  # Get the type of this polyline
-            subsample_factor = SUBSAMPLE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
-            subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
-            for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
-                decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
-        return decomposed
+    # def _select_and_decompose_sequences(flattened_sequences: np.ndarray, types: np.ndarray):
+    #     """Select the unique ids and decompose the polylines into smaller pieces"""
+        # decomposed = []
+        # for id in unique_ids:
+        #     indices = valid_ids == id
+        #     polyline_type = types[indices][0]  # Get the type of this polyline
+        #     subsample_factor = SUBSAMPLE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
+            
+        #     subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
+        #     for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
+        #         decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
+    #     return decomposed
 
-    chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
-    chopped_dirs = _select_and_decompose_sequences(valid_dirs, valid_types)
-    chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
-    chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
+    # chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
+    # chopped_dirs = _select_and_decompose_sequences(valid_dirs, valid_types)
+    # chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
+    # chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
+
+    chopped_polylines = []
+    chopped_dirs = []
+    chopped_types = []
+    chopped_ids = []
+    for id in unique_ids:
+        indices = valid_ids == id
+        
+        selected_polylines = valid_points[indices]
+        selected_dirs = valid_dirs[indices]
+        selected_types = valid_types[indices]
+        selected_ids = valid_ids[indices]
+
+        polyline_type = selected_types[0]  # Get the type of this polyline
+        
+        subsample_factor = SUBSAMPLE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
+
+        def _subsample_and_append(sequence: np.ndarray, sequence_to_append_to: List[np.ndarray]):        
+            sampled = _subsample_sequence(sequence, subsample_factor)
+            for i in range(0, len(sampled), MAX_POLYLINE_LENGTH):
+                sequence_to_append_to.append(sampled[i : i + MAX_POLYLINE_LENGTH])
+        
+        _subsample_and_append(selected_polylines, chopped_polylines)
+        _subsample_and_append(selected_dirs, chopped_dirs)
+        _subsample_and_append(selected_types, chopped_types)
+        _subsample_and_append(selected_ids, chopped_ids)
+
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
 
     def _nest_and_pad(tensor: np.ndarray, torch_type: Any, padding: Any) -> np.ndarray:
