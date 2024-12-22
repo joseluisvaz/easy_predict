@@ -25,6 +25,7 @@ from torch import Tensor
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from lightning.pytorch.callbacks import ModelCheckpoint
 from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
+from waymo_loader.dataset import ProcessedDataset
 from models.prediction import PredictionModel
 from waymo_loader.feature_description import (
     NUM_HISTORY_FRAMES,
@@ -117,7 +118,7 @@ class LightningModule(L.LightningModule):
             ground_truth_is_valid=gt_states_avails,
             prediction_ground_truth_indices=pred_gt_indices,
             prediction_ground_truth_indices_mask=pred_gt_indices_mask,
-            object_type=actor_type[..., 0],
+            object_type=actor_type,
         )
 
     def _inference_and_loss(self, batch):
@@ -185,8 +186,8 @@ class LightningModule(L.LightningModule):
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
-        dataset = WaymoH5Dataset(
-            self.hyperparameters.train_dataset, self.hyperparameters.train_with_tracks_to_predict
+        dataset = ProcessedDataset(
+            self.hyperparameters.train_dataset,
         )
         return DataLoader(
             dataset,
@@ -201,8 +202,8 @@ class LightningModule(L.LightningModule):
         )
 
     def val_dataloader(self):
-        dataset = WaymoH5Dataset(
-            self.hyperparameters.val_dataset, self.hyperparameters.train_with_tracks_to_predict
+        dataset = ProcessedDataset(
+            self.hyperparameters.val_dataset, 
         )
         return DataLoader(
             dataset,
@@ -245,7 +246,7 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
         verbose=True,
     )
     metrics_callback = OnTrainCallback(
-        hyperparameters.val_dataset, hyperparameters.train_with_tracks_to_predict
+        hyperparameters.val_dataset,
     )
 
     trainer = L.Trainer(
@@ -254,7 +255,7 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
         devices=1,
         fast_dev_run=fast_dev_run,
         precision="16-mixed",
-        # callbacks=[metrics_callback, checkpoint_callback],
+        callbacks=[metrics_callback, checkpoint_callback],
         accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
         profiler=SimpleProfiler(),
         gradient_clip_val=hyperparameters.grad_norm_clip,

@@ -1,22 +1,23 @@
-import itertools
 import io
-from PIL import Image
+import itertools
 
 import lightning as L
+import numpy as np
 import torch
-from torch.utils.data import DataLoader
 from matplotlib import pyplot as plt
-from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import Affine2D
-import numpy as np
+from PIL import Image
+from torch.utils.data import DataLoader
 
+from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
+from waymo_loader.dataset import ProcessedDataset
 from waymo_loader.feature_description import (
     _ROADGRAPH_IDX_TO_TYPE,
     _ROADGRAPH_TYPE_TO_COLOR,
-    NUM_HISTORY_FRAMES,
     NUM_FUTURE_FRAMES,
+    NUM_HISTORY_FRAMES,
 )
 
 
@@ -51,11 +52,11 @@ def plot_oriented_box(ax, x, y, orientation, length, width, color="blue", alpha=
 
 
 class OnTrainCallback(L.Callback):
-    def __init__(self, datadir: str, train_with_tracks_to_predict: bool):
+    def __init__(self, datadir: str):
         super().__init__()
 
         self._n_samples = 5
-        dataset = WaymoH5Dataset(datadir, train_with_tracks_to_predict=train_with_tracks_to_predict)
+        dataset = ProcessedDataset(datadir)
         self._dataloader = DataLoader(
             dataset,
             batch_size=1,
@@ -141,24 +142,22 @@ class OnTrainCallback(L.Callback):
             predicted_sequences.append(predicted_sequence)
             current_states.append(current_state)
 
-        map_features = torch.nested.to_padded_tensor(
-            single_sample["roadgraph_features"], padding=0.0
-        ).cpu()
-        map_avails = torch.nested.to_padded_tensor(
-            single_sample["roadgraph_features_mask"], padding=False
-        ).cpu()
-        map_types = torch.nested.to_padded_tensor(
-            single_sample["roadgraph_features_types"], padding=False
-        ).cpu()
-        map_ids = torch.nested.to_padded_tensor(
-            single_sample["roadgraph_features_ids"], padding=False
-        ).cpu()
+        map_features = single_sample["roadgraph_features"].cpu()
+        map_avails = single_sample["roadgraph_features_mask"].cpu()
+        map_types = single_sample["roadgraph_features_types"].cpu()
+        map_ids = single_sample["roadgraph_features_ids"].cpu()
 
+        n_batch, n_polylines, n_points, _ = map_features.shape
         map_features = map_features[..., :2].view(-1, 2)
+        
         map_avails = map_avails.view(-1, 1)[:, 0]  # [N,]
         map_points = map_features[map_avails]  # [N, 2]
-        map_types = map_types.view(-1)[map_avails].to(torch.int32)  # [N,]
-        map_ids = map_ids.view(-1)[map_avails].to(torch.int32)  # [N,]
+        
+        map_types = map_types.view(n_batch, n_polylines, 1).expand(-1, -1, n_points)
+        map_ids = map_ids.view(n_batch, n_polylines, 1).expand(-1, -1, n_points)
+        
+        map_types = map_types.flatten()[map_avails].to(torch.int32)  # [N,]
+        map_ids = map_ids.flatten()[map_avails].to(torch.int32)  # [N,]
 
         plt.figure()
 
