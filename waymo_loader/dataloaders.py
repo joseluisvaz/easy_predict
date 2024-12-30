@@ -361,14 +361,15 @@ def _generate_features(
     if train_with_tracks_to_predict:
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
+        
     
     return {
-        "gt_states": agent_features.gt_states.astype(np.float32), # [N_AGENTS, TIME, FEATS]
+        "gt_states": agent_features.gt_states.astype(np.float32), # [N_AGENTS, TIME, FEATS=7]
         "gt_states_avails": agent_features.gt_states_avails.astype(np.bool_), # [N_AGENTS, TIME]
         "actor_type": agent_features.actor_type.astype(np.int64), # [N_AGENTS,]
         "is_sdc": agent_features.is_sdc.astype(np.bool_), # [N_AGENTS,]
         "tracks_to_predict": agent_features.tracks_to_predict.astype(np.bool_), # [N_AGENTS,]
-        "roadgraph_features": map_features["roadgraph_features"].astype(np.float32), # [N_POLYLINE, N_POINTS, FEATS]
+        "roadgraph_features": map_features["roadgraph_features"].astype(np.float32), # [N_POLYLINE, N_POINTS, FEATS=4]
         "roadgraph_features_mask": map_features["roadgraph_features_mask"].astype(np.bool_), # [N_POLYLINE, N_POINTS]
         "roadgraph_features_types": map_features["roadgraph_features_types"].astype(np.int64), # [N_POLYLINE,]
         "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(np.int16), # [N_POLYLINE,]
@@ -430,6 +431,5 @@ class WaymoH5Dataset(Dataset):
         )
         return _generate_features(data_fetched, train_with_tracks_to_predict=self.train_with_tracks_to_predict)
 
-    def __del__(self):
         if self.dataset is not None:
             self.dataset.close()

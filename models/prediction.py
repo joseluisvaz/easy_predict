@@ -1,12 +1,14 @@
+import math
 import typing as T
 
 import torch
 import torch.nn as nn
-from torch import Tensor
 import torch.nn.functional as F
+from torch import Tensor
+
 from models.multi_context_gating import MultiContextGating
-from models.rnn_cells import MultiAgentLSTMCell
 from models.multiheaded_attention import MultiheadAttention
+from models.rnn_cells import MultiAgentLSTMCell
 from waymo_loader.feature_description import NUM_HISTORY_FRAMES
 
 
@@ -68,6 +70,26 @@ class MLP(nn.Module):
         return x
 
 
+class PolylineRNN(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(PolylineRNN, self).__init__()
+        self.lstm_cell = MultiAgentLSTMCell(input_size, hidden_size)
+        self.hidden_size = hidden_size
+
+    def forward(self, sequence, mask):
+        n_batch, n_groups, n_elements, _ = sequence.shape
+        hidden, context = self.lstm_cell.get_initial_hidden_state(
+            (n_batch, n_groups, self.hidden_size), sequence.device, requires_grad=True
+        )
+
+        for t in range(n_elements):
+            input_t = sequence[:, :, t, :]
+            mask_t = mask[:, :, t]
+            hidden, context = self.lstm_cell(input_t, (hidden, context), mask_t)
+
+        return hidden, context
+
+    
 class PolylineEncoder(nn.Module):
     def __init__(
         self,
@@ -112,7 +134,7 @@ def concatenate_historical_features(history_states: torch.Tensor, actor_types: t
     n_batch, n_agents, n_past, _ = history_states.shape
     # clamp to 0, to remove instances of -1
     types = actor_types.clamp_(min=0).view(n_batch, n_agents, 1).expand(-1, -1, n_past)
-    
+
     NUM_CLASSES: T.Final = 5
     types_one_hot = F.one_hot(types, num_classes=NUM_CLASSES).float()
     return torch.cat(
@@ -211,10 +233,78 @@ class MapPointNet(nn.Module):
         return x_pooled, polyline_map_avails
 
 
+class NewGELU(nn.Module):
+    """
+    Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
+    Reference: Gaussian Error Linear Units (GELU) paper: https://arxiv.org/abs/1606.08415
+    """
+
+    def forward(self, x):
+        return (
+            0.5
+            * x
+            * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
+        )
+
+class SelfAttentionBlock(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, dropout_p: float):
+        super(SelfAttentionBlock, self).__init__()
+        self.mha = nn.MultiheadAttention(embed_dim, num_heads, dropout_p, batch_first=True)
+
+        self.mlp = nn.ModuleDict(
+            dict(
+                c_upproj=nn.Linear(embed_dim, 4 * embed_dim),
+                c_downproj=nn.Linear(4 * embed_dim, embed_dim),
+                act=NewGELU(),
+                dropout=nn.Dropout(dropout_p),
+            )
+        )
+        m = self.mlp
+        self.mlpf = lambda x: m.dropout(m.c_downproj(m.act(m.c_upproj(x))))  # MLP forward
+
+    def forward(self, x: Tensor, mask: Tensor) -> Tensor:
+        """Interaction block for cross attention
+        x: embedding
+        cross_mask: mask for embedding, representing the keys
+        """
+        attention, _ = self.mha(query=x, key=x, value=x, key_padding_mask=mask)
+        x = x + attention
+        x = x + self.mlpf(x)
+        return x
+
+class CrossAttentionBlock(nn.Module):
+    def __init__(self, embed_dim: int, num_heads: int, dropout_p: float):
+        super(CrossAttentionBlock, self).__init__()
+        self.mha = nn.MultiheadAttention(embed_dim, num_heads, dropout_p, batch_first=True)
+
+        self.mlp = nn.ModuleDict(
+            dict(
+                c_upproj=nn.Linear(embed_dim, 4 * embed_dim),
+                c_downproj=nn.Linear(4 * embed_dim, embed_dim),
+                act=NewGELU(),
+                dropout=nn.Dropout(dropout_p),
+            )
+        )
+        m = self.mlp
+        self.mlpf = lambda x: m.dropout(m.c_downproj(m.act(m.c_upproj(x))))  # MLP forward
+
+    def forward(self, x: Tensor, cross_x: Tensor, cross_mask: Tensor) -> Tensor:
+        """Interaction block for cross attention
+        x: embedding
+        cross_x: embedding to attend to
+        cross_mask: mask for cross_x embedding, representing the keys
+        """
+        attention, _ = self.mha(query=x, key=cross_x, value=cross_x, key_padding_mask=cross_mask)
+        x = x + attention
+        x = x + self.mlpf(x)
+        return x
+
+
 class PredictionModel(nn.Module):
 
     NUM_MCG_LAYERS = 4
     MAP_INPUT_SIZE = 20  # x, y, direction and one hot encoded type
+    
 
     def __init__(self, input_features, hidden_size, n_timesteps):
         super(PredictionModel, self).__init__()
@@ -222,16 +312,12 @@ class PredictionModel(nn.Module):
         self.decoder = Decoder(hidden_size, n_timesteps)
 
         # Map parameters
-        self.polyline_adapter = nn.Linear(24, 128)
-        self.polyline_encoder = PolylineEncoder(128, n_layer=3, mlp_dropout_p=0.0)
+        self.polyline_adapter = nn.Linear(24, hidden_size)
+        self.polyline_encoder = PolylineEncoder(hidden_size, n_layer=3, mlp_dropout_p=0.0)
 
         # Attention mechanisms
-        self.polyline_interaction = nn.MultiheadAttention(
-            embed_dim=128, num_heads=8, dropout=0.0, batch_first=True
-        )
-        self.actor_interaction = nn.MultiheadAttention(
-            embed_dim=128, num_heads=8, dropout=0.0, batch_first=True
-        )
+        self.polyline_interaction = CrossAttentionBlock(embed_dim=hidden_size, num_heads=8, dropout_p=0.0)
+        self.actor_interaction = CrossAttentionBlock(embed_dim=hidden_size, num_heads=8, dropout_p=0.0)
 
     def forward(
         self,
@@ -251,29 +337,29 @@ class PredictionModel(nn.Module):
         map_feats = concatenate_map_features(map_feats, map_types)
 
         polyline_avails = torch.any(map_avails, dim=2)
+        actor_avails = torch.any(history_availabilities, dim=2)
         map_invalid = ~map_avails
         pl_invalid = ~polyline_avails
-
+        
         # Encode map
         x_map = self.polyline_adapter(map_feats)
-        hidden_polyline = self.polyline_encoder(x_map, map_invalid)
-
+        hidden_polyline = self.polyline_encoder(x_map, map_invalid) # [N_BATCH, N_POLYLINES]
+        
         # Encode actors
         hidden_actors, context_actors = self.encoder(history_features, history_availabilities)
-
-        # Attend actor to polylines
-        attend_to_polyline, _ = self.polyline_interaction(
-            hidden_actors, hidden_polyline, hidden_polyline, key_padding_mask=pl_invalid
+        
+        # Attend actor to polylines, output size of actors
+        attend_to_polyline = self.polyline_interaction(
+            hidden_actors, hidden_polyline, cross_mask=pl_invalid
         )
 
         # For now decoder only takes positions
         current_features = history_features[:, :, -1]
         current_availabilities = history_availabilities[:, :, -1]
-        attend_to_actors, _ = self.actor_interaction(
+        attend_to_actors = self.actor_interaction(
             hidden_actors,
             attend_to_polyline,
-            attend_to_polyline,
-            key_padding_mask=~current_availabilities,
+            cross_mask=~current_availabilities,
         )
         output = self.decoder(
             current_features, current_availabilities, attend_to_actors, context_actors

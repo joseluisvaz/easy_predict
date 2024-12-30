@@ -1,7 +1,4 @@
-from argparse import ArgumentParser, Namespace
 import warnings
-import typing as T
-from pytorch_lightning.profilers import SimpleProfiler
 
 # Ignore the warning about nested tensors to not spam the terminal
 warnings.filterwarnings(
@@ -9,31 +6,30 @@ warnings.filterwarnings(
     message="The PyTorch API of nested tensors is in prototype stage and will change in the near future.",
 )
 
-import torch
+import typing as T
+from argparse import ArgumentParser, Namespace
 
-torch.autograd.set_detect_anomaly(True)
-
-from torch.utils.data import DataLoader
-import matplotlib.pyplot as plt
-from clearml import Task
-from omegaconf import OmegaConf, DictConfig
 import lightning as L
+import matplotlib.pyplot as plt
+import torch
+from clearml import Task
+from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.tuner import Tuner
-from metrics import MotionMetrics, _default_metrics_config
-from metrics_callback import OnTrainCallback
+from omegaconf import DictConfig, OmegaConf
+from pytorch_lightning.profilers import SimpleProfiler
 from torch import Tensor
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from lightning.pytorch.callbacks import ModelCheckpoint
-from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
-from waymo_loader.dataset import ProcessedDataset
+from torch.utils.data import DataLoader
+
+from metrics import MotionMetrics, _default_metrics_config
+from metrics_callback import OnTrainCallback
 from models.prediction import PredictionModel
-from waymo_loader.feature_description import (
-    NUM_HISTORY_FRAMES,
-    NUM_FUTURE_FRAMES,
-    SUBSAMPLE_SEQUENCE,
-)
+from waymo_loader.dataloaders import collate_waymo
+from waymo_loader.dataset import ProcessedDataset
+from waymo_loader.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES
 
 plt.style.use("dark_background")
+torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")
 
 LR_FIND = False
@@ -59,6 +55,7 @@ def compute_loss(
     elif loss_tracks_to_predict_mask:
         total_mask *= tracks_to_predict_mask.unsqueeze(-1)
 
+    # Sum over positions dimension
     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
     return torch.mean(errors * total_mask)
 
@@ -180,14 +177,14 @@ class LightningModule(L.LightningModule):
         )
         scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=self.hyperparameters.max_epochs * len(self.train_dataloader()),
+            T_max=self.hyperparameters.max_epochs,
             eta_min=self.hyperparameters.eta_min,
         )
         return [optimizer], [scheduler]
 
     def train_dataloader(self):
         dataset = ProcessedDataset(
-            self.hyperparameters.train_dataset,
+            self.hyperparameters.train_dataset, data_perturb_cfg=self.hyperparameters.data_perturb
         )
         return DataLoader(
             dataset,
@@ -203,7 +200,7 @@ class LightningModule(L.LightningModule):
 
     def val_dataloader(self):
         dataset = ProcessedDataset(
-            self.hyperparameters.val_dataset, 
+            self.hyperparameters.val_dataset,
         )
         return DataLoader(
             dataset,

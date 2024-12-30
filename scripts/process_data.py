@@ -46,7 +46,7 @@ def _append_to_h5_datasets(file: h5py.File, batch_data: T.Dict[str, np.ndarray])
 
 def main(data_dir: str, out: str):
 
-    dataset = WaymoH5Dataset(data_dir, train_with_tracks_to_predict=True)
+    dataset = WaymoH5Dataset(data_dir, train_with_tracks_to_predict=False)
     dataloader = DataLoader(
         dataset,
         batch_size=12,
@@ -54,7 +54,7 @@ def main(data_dir: str, out: str):
         shuffle=False,
         persistent_workers=True,
         pin_memory=False,
-        drop_last=True,
+        drop_last=False,
         prefetch_factor=4,
         collate_fn=collate_waymo,
     )
