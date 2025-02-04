@@ -1,6 +1,7 @@
 import io
 import itertools
 import typing as T
+from dataclasses import dataclass
 
 import lightning as L
 import torch
@@ -9,12 +10,11 @@ from PIL import Image
 from torch.utils.data import DataLoader
 from torchinfo import summary
 
+from common_utils.visualization import plot_scene
+from models.inference import run_model_forward_pass
 from waymo_loader.dataloaders import collate_waymo
 from waymo_loader.dataset import ProcessedDataset
-from waymo_loader.feature_description import (
-    NUM_HISTORY_FRAMES,
-)
-from common_utils.visualization import plot_scene
+from waymo_loader.feature_description import NUM_HISTORY_FRAMES
 
 
 class OnTrainCallback(L.Callback):
@@ -55,7 +55,8 @@ class OnTrainCallback(L.Callback):
         ):
             # Just extract a single sample from the batch and keep the batch dimension
             single_sample_batch = {k: v.cuda() for k, v in single_sample_batch.items()}
-            predicted_positions = self.run_inference(pl_module.model, single_sample_batch)
+
+            predicted_positions = run_model_forward_pass(pl_module.model, single_sample_batch)
             self.log_plot_to_clearml(
                 pl_module,
                 pl_module.task.get_logger(),
@@ -70,28 +71,14 @@ class OnTrainCallback(L.Callback):
             for j, n in enumerate(pl_module.metrics.metric_names):
                 self.log(f"metrics/{m}/{n}", float(train_metric_values[i, j]))
         pl_module.metrics.reset_state()
-    
-    def run_inference(self, model, single_sample) -> T.Dict[str, torch.Tensor]:
-        """Run inference on a single sample."""
-        history_states = single_sample["gt_states"][:, :, : NUM_HISTORY_FRAMES + 1]
-        history_avails = single_sample["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
 
-        predicted_positions = model(
-            history_states,
-            history_avails,
-            single_sample["actor_type"],
-            single_sample["roadgraph_features"],
-            single_sample["roadgraph_features_mask"],
-            single_sample["roadgraph_features_types"],
-        )
-        return predicted_positions 
-        
-
-    def log_plot_to_clearml(self, pl_module, logger, single_sample, predicted_positions, current_epoch, scene_idx: int):
+    def log_plot_to_clearml(
+        self, pl_module, logger, single_sample, predicted_positions, current_epoch, scene_idx: int
+    ):
         """Creates the image of a single scenario and logs it to ClearML.
         Assumption: Each component of the scenario has the batch dimension of size 1
         """
-        
+
         plot_scene(single_sample, predicted_positions)
 
         # Save the plot to an in-memory buffer

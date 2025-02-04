@@ -10,6 +10,7 @@ from common_utils.geometry import (
     get_yaw_from_se2,
     transform_points,
 )
+from common_utils.tensor_utils import force_pad_batch_size
 
 
 def perturb_pose(batch: T.Dict[str, np.ndarray], delta_yaw: float = 0.1, delta_t: float = 1.0):
@@ -37,12 +38,36 @@ def perturb_pose(batch: T.Dict[str, np.ndarray], delta_yaw: float = 0.1, delta_t
     return batch
 
 
+def mask_only_target_agents_and_sdc(batch: T.Dict[str, np.ndarray]) -> T.Dict[str, np.ndarray]:
+    """Mask the agents that are not the target agents or are not SDCs, it also pads it so that we can concatenate it."""
+    target_agents = np.logical_or(batch["tracks_to_predict"], batch["is_sdc"])  # [N_AGENTS,]
+    batch["gt_states"] = batch["gt_states"][target_agents]
+    batch["gt_states_avails"] = batch["gt_states_avails"][target_agents]
+    batch["actor_type"] = batch["actor_type"][target_agents]
+    batch["is_sdc"] = batch["is_sdc"][target_agents]
+    batch["tracks_to_predict"] = batch["tracks_to_predict"][target_agents]
+    
+    MAX_N_AGENTS: T.Final[int] = 9 # The maximum number of agents in tracks to predict plus the ego agent
+    batch["gt_states"] = force_pad_batch_size(batch["gt_states"], MAX_N_AGENTS)
+    batch["gt_states_avails"] = force_pad_batch_size(batch["gt_states_avails"], MAX_N_AGENTS)
+    batch["actor_type"] = force_pad_batch_size(batch["actor_type"], MAX_N_AGENTS)
+    batch["is_sdc"] = force_pad_batch_size(batch["is_sdc"], MAX_N_AGENTS)
+    batch["tracks_to_predict"] = force_pad_batch_size(batch["tracks_to_predict"], MAX_N_AGENTS)
+    return batch
+
+
 class ProcessedDataset(Dataset):
-    def __init__(self, filepath: str, data_perturb_cfg: T.Optional[T.Any] = None):
+    def __init__(
+        self,
+        filepath: str,
+        data_perturb_cfg: T.Optional[T.Any] = None,
+        train_with_tracks_to_predict: bool = False,
+    ):
         """Do not open the h5 file here"""
         self.file: T.Optional[h5py.File] = None
         self.filepath = filepath
         self.perturb_cfg = data_perturb_cfg
+        self.train_with_tracks_to_predict = train_with_tracks_to_predict
 
         # Open and close dataset just to extract the length
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
@@ -82,11 +107,16 @@ class ProcessedDataset(Dataset):
             ),  # [N_POLYLINE,]
         }
 
+        # Reverse the roadgraph features in case we want to use an RNN, this simulates left padding
+        # instead of right padding, TODO I still do not know if this makes a difference
         batch["roadgraph_features"] = batch["roadgraph_features"][:, ::-1].copy()
         batch["roadgraph_features_mask"] = batch["roadgraph_features_mask"][:, ::-1].copy()
 
         if (self.perturb_cfg is not None) and (np.random.rand() < self.perturb_cfg.perturb_prob):
             batch = perturb_pose(batch, self.perturb_cfg.delta_yaw, self.perturb_cfg.delta_t)
+
+        if self.train_with_tracks_to_predict:
+            batch = mask_only_target_agents_and_sdc(batch)
 
         return batch
 

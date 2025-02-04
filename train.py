@@ -23,10 +23,11 @@ from torch.utils.data import DataLoader
 
 from metrics import MotionMetrics, _default_metrics_config
 from metrics_callback import OnTrainCallback
+from models.inference import run_model_forward_pass
 from models.prediction import PredictionModel
 from waymo_loader.dataloaders import collate_waymo
 from waymo_loader.dataset import ProcessedDataset
-from waymo_loader.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES
+from waymo_loader.feature_description import NUM_FUTURE_FRAMES
 
 plt.style.use("dark_background")
 torch.autograd.set_detect_anomaly(True)
@@ -78,6 +79,7 @@ class LightningModule(L.LightningModule):
             input_features=12,
             hidden_size=hyperparameters.hidden_size,
             n_timesteps=self.n_timesteps,
+            normalize=hyperparameters.normalize_features
         )
         self.hyperparameters = hyperparameters
 
@@ -119,21 +121,13 @@ class LightningModule(L.LightningModule):
         )
 
     def _inference_and_loss(self, batch):
-        history_states = batch["gt_states"][:, :, : NUM_HISTORY_FRAMES + 1, :]
-        history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
 
-        predicted_positions = self.model(
-            history_states,
-            history_avails,
-            batch["actor_type"],
-            batch["roadgraph_features"],
-            batch["roadgraph_features_mask"],
-            batch["roadgraph_features_types"],
-        )
+        predicted_positions = run_model_forward_pass(self.model, batch)
 
         # Crop the future positions to match the number of timesteps
         future_positions = batch["gt_states"][:, :, -NUM_FUTURE_FRAMES:, :2]
         future_availabilities = batch["gt_states_avails"][:, :, -NUM_FUTURE_FRAMES:]
+
         loss = compute_loss(
             predicted_positions,
             future_positions,
@@ -175,16 +169,13 @@ class LightningModule(L.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.learning_rate, weight_decay=self.hyperparameters.weight_decay
         )
-        scheduler = CosineAnnealingLR(
-            optimizer,
-            T_max=self.hyperparameters.max_epochs,
-            eta_min=self.hyperparameters.eta_min,
-        )
-        return [optimizer], [scheduler]
+        return optimizer
 
     def train_dataloader(self):
         dataset = ProcessedDataset(
-            self.hyperparameters.train_dataset, data_perturb_cfg=self.hyperparameters.data_perturb
+            self.hyperparameters.train_dataset,
+            data_perturb_cfg=self.hyperparameters.data_perturb,
+            train_with_tracks_to_predict=self.hyperparameters.train_with_tracks_to_predict,
         )
         return DataLoader(
             dataset,
@@ -201,6 +192,7 @@ class LightningModule(L.LightningModule):
     def val_dataloader(self):
         dataset = ProcessedDataset(
             self.hyperparameters.val_dataset,
+            train_with_tracks_to_predict=self.hyperparameters.train_with_tracks_to_predict,
         )
         return DataLoader(
             dataset,

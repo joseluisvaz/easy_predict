@@ -1,5 +1,5 @@
-from typing import Dict
 from collections import OrderedDict
+from typing import Dict
 
 import tensorflow as tf
 
@@ -7,6 +7,11 @@ SUBSAMPLE_SEQUENCE = 2  # e.g. 2 means 5 Hz instead of 10Hz sampling
 NUM_HISTORY_FRAMES = 10 // SUBSAMPLE_SEQUENCE
 NUM_FUTURE_FRAMES = 80 // SUBSAMPLE_SEQUENCE
 NUM_MAP_SAMPLES = 30000
+
+GT_STATES_MEANS = [16.9850,  2.4561,  4.4966,  2.0180,  1.6618,  0.5991, -0.0354]
+GT_STATES_STDS = [41.7659, 29.3103,  1.2764,  0.3939,  3.4035,  5.1634,  2.5289]
+ROADGRAPH_MEANS = [ 2.4929e+01,  2.6036e+00,  8.8117e-03, -1.2278e-03]
+ROADGRAPH_STDS = [63.7964, 36.8537,  0.7378,  0.6223]
 
 _ROADGRAPH_TYPE_TO_IDX = {
     "LaneCenter-Freeway": 1,
