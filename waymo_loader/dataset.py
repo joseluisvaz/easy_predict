@@ -4,38 +4,13 @@ import h5py
 import numpy as np
 from torch.utils.data import Dataset
 
-from common_utils.geometry import (
-    get_so2_from_se2,
-    get_transformation_matrix,
-    get_yaw_from_se2,
-    transform_points,
-)
+from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
 from common_utils.tensor_utils import force_pad_batch_size
-
-
-def perturb_pose(batch: T.Dict[str, np.ndarray], delta_yaw: float = 0.1, delta_t: float = 1.0):
-    """Perturb the pose of the agents in the batch"""
-    r = np.random.uniform(-delta_yaw, delta_yaw, 1)
-    t = np.random.uniform(-delta_t, delta_t, (1, 2))
-    perturbation_se2 = get_transformation_matrix(t, r)
-    perturbation_so2 = get_so2_from_se2(perturbation_se2)
-    relative_yaw = get_yaw_from_se2(perturbation_se2)
-
-    # Modify geometrical properties for agent features
-    avails = batch["gt_states_avails"]
-    positions = batch["gt_states"][avails, :2]
-    velocities = batch["gt_states"][avails, 5:7]
-    batch["gt_states"][avails, :2] = transform_points(positions, perturbation_se2)
-    batch["gt_states"][avails, 5:7] = transform_points(velocities, perturbation_so2)
-    batch["gt_states"][avails, 4] += relative_yaw
-
-    # Modify geometrical properties for map features
-    map_avails = batch["roadgraph_features_mask"]
-    map_points = batch["roadgraph_features"][map_avails, :2]
-    map_dirs = batch["roadgraph_features"][map_avails, 2:4]
-    batch["roadgraph_features"][map_avails, :2] = transform_points(map_points, perturbation_se2)
-    batch["roadgraph_features"][map_avails, 2:4] = transform_points(map_dirs, perturbation_so2)
-    return batch
+from waymo_loader.data_augmentation.data_augmentation import (
+    AnchorFrameAugmentation,
+    BaseFrameAugmentation,
+    ComposedAugmentation,
+)
 
 
 def mask_only_target_agents_and_sdc(batch: T.Dict[str, np.ndarray]) -> T.Dict[str, np.ndarray]:
@@ -46,8 +21,10 @@ def mask_only_target_agents_and_sdc(batch: T.Dict[str, np.ndarray]) -> T.Dict[st
     batch["actor_type"] = batch["actor_type"][target_agents]
     batch["is_sdc"] = batch["is_sdc"][target_agents]
     batch["tracks_to_predict"] = batch["tracks_to_predict"][target_agents]
-    
-    MAX_N_AGENTS: T.Final[int] = 9 # The maximum number of agents in tracks to predict plus the ego agent
+
+    MAX_N_AGENTS: T.Final[int] = (
+        9  # The maximum number of agents in tracks to predict plus the ego agent
+    )
     batch["gt_states"] = force_pad_batch_size(batch["gt_states"], MAX_N_AGENTS)
     batch["gt_states_avails"] = force_pad_batch_size(batch["gt_states_avails"], MAX_N_AGENTS)
     batch["actor_type"] = force_pad_batch_size(batch["actor_type"], MAX_N_AGENTS)
@@ -68,6 +45,23 @@ class ProcessedDataset(Dataset):
         self.filepath = filepath
         self.perturb_cfg = data_perturb_cfg
         self.train_with_tracks_to_predict = train_with_tracks_to_predict
+
+        self.augmentation = (
+            ComposedAugmentation(
+                [
+                    AnchorFrameAugmentation(
+                        perturb_prob=self.perturb_cfg.anchor_frame.perturb_prob
+                    ),
+                    BaseFrameAugmentation(
+                        perturb_prob=self.perturb_cfg.base_frame.perturb_prob,
+                        delta_t=self.perturb_cfg.base_frame.delta_t,
+                        delta_yaw=self.perturb_cfg.base_frame.delta_yaw,
+                    ),
+                ]
+            )
+            if self.perturb_cfg is not None
+            else None
+        )
 
         # Open and close dataset just to extract the length
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
@@ -112,8 +106,8 @@ class ProcessedDataset(Dataset):
         batch["roadgraph_features"] = batch["roadgraph_features"][:, ::-1].copy()
         batch["roadgraph_features_mask"] = batch["roadgraph_features_mask"][:, ::-1].copy()
 
-        if (self.perturb_cfg is not None) and (np.random.rand() < self.perturb_cfg.perturb_prob):
-            batch = perturb_pose(batch, self.perturb_cfg.delta_yaw, self.perturb_cfg.delta_t)
+        if self.augmentation is not None:
+            self.augmentation.perturb(batch)
 
         if self.train_with_tracks_to_predict:
             batch = mask_only_target_agents_and_sdc(batch)

@@ -1,31 +1,30 @@
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Generic, TypeVar, Final
 import typing as T
-from collections import OrderedDict
 import warnings
+from collections import OrderedDict
+from dataclasses import dataclass
+from typing import Any, Dict, Final, Generic, List, Optional, TypeVar
 
 import h5py
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
-import torch.nn.functional as F
-
 
 from common_utils.geometry import (
-    transform_points,
-    get_transformation_matrix,
     get_so2_from_se2,
+    get_transformation_matrix,
     get_yaw_from_se2,
+    transform_points,
 )
 from common_utils.tensor_utils import force_pad_batch_size
 from waymo_loader.feature_description import (
-    STATE_FEATURES,
-    ROADGRAPH_FEATURES,
     _ROADGRAPH_TYPE_TO_IDX,
     NUM_HISTORY_FRAMES,
-    SUBSAMPLE_SEQUENCE
+    ROADGRAPH_FEATURES,
+    STATE_FEATURES,
+    SUBSAMPLE_SEQUENCE,
 )
 
 ROADGRAPH_TYPES_OF_INTEREST: Final = {
@@ -145,7 +144,7 @@ class WaymoDatasetHelper(object):
             ],
             axis=1,
         ).astype(np.bool_)
-        
+
         gt_states = gt_states[:, ::SUBSAMPLE_SEQUENCE]
         gt_states_avails = gt_states_avails[:, ::SUBSAMPLE_SEQUENCE]
 
@@ -155,17 +154,18 @@ class WaymoDatasetHelper(object):
             gt_states_avails=gt_states_avails.astype(np.bool_),
             actor_type=decoded_example["state/type"].squeeze().astype(np.intp),
             is_sdc=(decoded_example["state/is_sdc"] > 0).squeeze().astype(np.bool_),
-            tracks_to_predict=(decoded_example["state/tracks_to_predict"] > 0).squeeze().astype(np.bool_),
+            tracks_to_predict=(decoded_example["state/tracks_to_predict"] > 0)
+            .squeeze()
+            .astype(np.bool_),
         )
-
 
 
 def pad_or_trim_first_dimension(tensor: np.array, value: Any) -> np.ndarray:
     """Pads or trims an array to a specific size."""
-    
+
     ndim = tensor.ndim
     assert ndim > 0
-    
+
     if tensor.shape[0] < MAX_NUM_POLYLINES:
         padding = MAX_NUM_POLYLINES - tensor.shape[0]
         padding_sequence = [(0, padding)] + [(0, 0)] * (ndim - 1)
@@ -294,8 +294,10 @@ def _parse_roadgraph_features(
         for id in unique_ids:
             indices = valid_ids == id
             polyline_type = types[indices][0]  # Get the type of this polyline
-            subsample_factor = SUBSAMPLE_POLYLINE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
-            
+            subsample_factor = (
+                SUBSAMPLE_POLYLINE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
+            )
+
             subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
             for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
                 decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
@@ -307,17 +309,20 @@ def _parse_roadgraph_features(
     chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
 
-
-    def _nest_and_pad(tensor_sequence: List[np.ndarray], torch_type: Any, padding: Any) -> np.ndarray:
+    def _nest_and_pad(
+        tensor_sequence: List[np.ndarray], torch_type: Any, padding: Any
+    ) -> np.ndarray:
         # Create a max size sensor to make the padding valid, we can remove it at the end
-        dummy_tensor = torch.zeros((MAX_POLYLINE_LENGTH, *tensor_sequence[0].shape[1:]), dtype=torch_type)
+        dummy_tensor = torch.zeros(
+            (MAX_POLYLINE_LENGTH, *tensor_sequence[0].shape[1:]), dtype=torch_type
+        )
         tensor_sequence.append(dummy_tensor)
-        
+
         nested_tensor = torch.nested.nested_tensor(tensor_sequence, dtype=torch_type)
         padded_tensor = torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
 
         # Remove the dummy tensor
-        return padded_tensor[:-1] 
+        return padded_tensor[:-1]
 
     chopped_polylines = _nest_and_pad(chopped_polylines, torch.float, 0.0)
     chopped_dirs = _nest_and_pad(chopped_dirs, torch.float, 0.0)
@@ -325,12 +330,20 @@ def _parse_roadgraph_features(
     masks = _nest_and_pad(masks, torch.bool, False)
     chopped_types = _nest_and_pad(chopped_types, torch.int64, 0)
     chopped_ids = _nest_and_pad(chopped_ids, torch.int16, 0)
-    
+
     return {
-        "roadgraph_features": pad_or_trim_first_dimension(features, 0.0), # [N_POLYLINE, N_POINTS, FEATS]
-        "roadgraph_features_mask": pad_or_trim_first_dimension(masks, False).squeeze(), # [N_POLYLINE, N_POINTS]
-        "roadgraph_features_types": pad_or_trim_first_dimension(chopped_types, 0)[:, 0], # [N_POLYLINE,] # Only one type per polyline
-        "roadgraph_features_ids": pad_or_trim_first_dimension(chopped_ids, 0)[:, 0], # [N_POLYLINE,] # Only one id per polyline
+        "roadgraph_features": pad_or_trim_first_dimension(
+            features, 0.0
+        ),  # [N_POLYLINE, N_POINTS, FEATS]
+        "roadgraph_features_mask": pad_or_trim_first_dimension(
+            masks, False
+        ).squeeze(),  # [N_POLYLINE, N_POINTS]
+        "roadgraph_features_types": pad_or_trim_first_dimension(chopped_types, 0)[
+            :, 0
+        ],  # [N_POLYLINE,] # Only one type per polyline
+        "roadgraph_features_ids": pad_or_trim_first_dimension(chopped_ids, 0)[
+            :, 0
+        ],  # [N_POLYLINE,] # Only one id per polyline
     }
 
 
@@ -338,12 +351,12 @@ def _generate_features(
     decoded_example: Dict[str, np.ndarray], train_with_tracks_to_predict: bool = False
 ) -> Dict[str, np.ndarray]:
     agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
-    
+
     # Mask everything to only keep tracks to predict and ego
     if train_with_tracks_to_predict:
         tracks_and_ego_mask = np.logical_or(agent_features.tracks_to_predict, agent_features.is_sdc)
         agent_features.filter_with_mask(tracks_and_ego_mask)
-     
+
     # # Now remove the unwanted agents by filtering with tracks to predict
     agent_features_current_state = agent_features.gt_states[:, NUM_HISTORY_FRAMES]
 
@@ -357,22 +370,31 @@ def _generate_features(
 
     valid_positions = agent_features.gt_states[agent_features.gt_states_avails][:, :2]
     map_features = _parse_roadgraph_features(decoded_example, to_sdc_se3, valid_positions)
-    
+
     if train_with_tracks_to_predict:
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
-        
-    
+
     return {
-        "gt_states": agent_features.gt_states.astype(np.float32), # [N_AGENTS, TIME, FEATS=7]
-        "gt_states_avails": agent_features.gt_states_avails.astype(np.bool_), # [N_AGENTS, TIME]
-        "actor_type": agent_features.actor_type.astype(np.int64), # [N_AGENTS,]
-        "is_sdc": agent_features.is_sdc.astype(np.bool_), # [N_AGENTS,]
-        "tracks_to_predict": agent_features.tracks_to_predict.astype(np.bool_), # [N_AGENTS,]
-        "roadgraph_features": map_features["roadgraph_features"].astype(np.float32), # [N_POLYLINE, N_POINTS, FEATS=4]
-        "roadgraph_features_mask": map_features["roadgraph_features_mask"].astype(np.bool_), # [N_POLYLINE, N_POINTS]
-        "roadgraph_features_types": map_features["roadgraph_features_types"].astype(np.int64), # [N_POLYLINE,]
-        "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(np.int16), # [N_POLYLINE,]
+        "gt_states": agent_features.gt_states.astype(
+            np.float32
+        ),  # [N_AGENTS, TIME, FEATS=7] (x, y, length, width, bbox_yaw, velocity_x, velocity_y)
+        "gt_states_avails": agent_features.gt_states_avails.astype(np.bool_),  # [N_AGENTS, TIME]
+        "actor_type": agent_features.actor_type.astype(np.int64),  # [N_AGENTS,]
+        "is_sdc": agent_features.is_sdc.astype(np.bool_),  # [N_AGENTS,]
+        "tracks_to_predict": agent_features.tracks_to_predict.astype(np.bool_),  # [N_AGENTS,]
+        "roadgraph_features": map_features["roadgraph_features"].astype(
+            np.float32
+        ),  # [N_POLYLINE, N_POINTS, FEATS=4] (x, y, dx, dy)
+        "roadgraph_features_mask": map_features["roadgraph_features_mask"].astype(
+            np.bool_
+        ),  # [N_POLYLINE, N_POINTS]
+        "roadgraph_features_types": map_features["roadgraph_features_types"].astype(
+            np.int64
+        ),  # [N_POLYLINE,]
+        "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(
+            np.int16
+        ),  # [N_POLYLINE,]
     }
 
 
@@ -429,7 +451,9 @@ class WaymoH5Dataset(Dataset):
         data_fetched.update(
             parse_concatenated_tensor(roadgraph_merged_features, ROADGRAPH_FEATURES)
         )
-        return _generate_features(data_fetched, train_with_tracks_to_predict=self.train_with_tracks_to_predict)
+        return _generate_features(
+            data_fetched, train_with_tracks_to_predict=self.train_with_tracks_to_predict
+        )
 
         if self.dataset is not None:
             self.dataset.close()

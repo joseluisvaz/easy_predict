@@ -24,6 +24,7 @@ from torch.utils.data import DataLoader
 from metrics import MotionMetrics, _default_metrics_config
 from metrics_callback import OnTrainCallback
 from models.inference import run_model_forward_pass
+from models.multipath import MultiPathPP
 from models.prediction import PredictionModel
 from waymo_loader.dataloaders import collate_waymo
 from waymo_loader.dataset import ProcessedDataset
@@ -121,7 +122,6 @@ class LightningModule(L.LightningModule):
         )
 
     def _inference_and_loss(self, batch):
-
         predicted_positions = run_model_forward_pass(self.model, batch)
 
         # Crop the future positions to match the number of timesteps

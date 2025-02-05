@@ -4,16 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.attention import CrossAttentionBlock
+from models.attention import CrossAttentionBlock, SelfAttentionBlock
 from models.polyline_encoder import PointNetPolylineEncoder, build_mlps
 from models.rnn_cells import MultiAgentLSTMCell
-from waymo_loader.feature_description import (
-    GT_STATES_MEANS,
-    GT_STATES_STDS,
-    NUM_HISTORY_FRAMES,
-    ROADGRAPH_MEANS,
-    ROADGRAPH_STDS,
-)
+from waymo_loader.feature_description import GT_STATES_MEANS, GT_STATES_STDS, ROADGRAPH_MEANS, ROADGRAPH_STDS
 
 
 def concatenate_historical_features(history_states: torch.Tensor, actor_types: torch.Tensor):
@@ -129,7 +123,7 @@ class PredictionModel(nn.Module):
         self.polyline_encoder = PointNetPolylineEncoder(
             24, 64, num_layers=5, num_pre_layers=3, out_channels=128
         )
-
+     
         # Attention mechanisms
         self.polyline_interaction = CrossAttentionBlock(
             embed_dim=hidden_size, num_heads=8, dropout_p=0.0
@@ -159,24 +153,14 @@ class PredictionModel(nn.Module):
         current_features = history_features[:, :, -1].clone()
         current_availabilities = history_availabilities[:, :, -1]
 
-        # Normalize
-        if self.normalize:
-            gt_means = torch.Tensor(GT_STATES_MEANS).to(history_states.device)
-            gt_stds = torch.Tensor(GT_STATES_STDS).to(history_states.device)
-            roadgraph_means = torch.Tensor(ROADGRAPH_MEANS).to(history_states.device)
-            roadgraph_stds = torch.Tensor(ROADGRAPH_STDS).to(history_states.device)
-
-            history_features[..., :7] = (history_features[..., :7] - gt_means) / (gt_stds + 1e-6)
-            map_feats[..., :4] = (map_feats[..., :4] - roadgraph_means) / (roadgraph_stds + 1e-6)
-
         polyline_avails = torch.any(map_avails, dim=2)
 
-        # Encode map
+        # Encode map into its own embedding
         hidden_polyline = self.polyline_encoder(map_feats, map_avails)  # [N_BATCH, N_POLYLINES]
 
-        # Encode actors
+        # Encode actors into their embedding using an RNN
         hidden_actors, context_actors = self.encoder(history_features, history_availabilities)
-
+        
         # Attend actor to polylines, output size of actors
         attend_to_polyline = self.polyline_interaction(
             hidden_actors, hidden_polyline, cross_mask=~polyline_avails

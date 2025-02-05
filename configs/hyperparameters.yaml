@@ -15,9 +15,17 @@ train_with_tracks_to_predict: Train # instead of 128 elements use 8, False is st
 num_workers: 16
 
 data_perturb:
-  perturb_prob: 0.0
-  delta_yaw: 1.0
-  delta_t: 10.0
+  anchor_frame:
+    perturb_prob: 0.1
+  base_frame: 
+    perturb_prob: 0.1
+    delta_t: 10.0
+    delta_yaw: 0.8
+    
+# dynamics_layer:
+#   max_acc: 10.0
+#   max_yaw_rate: 1.0
+#   delta_t: 0.2
 
 # Loss options
 loss_tracks_to_predict_mask: True  # True is standard WOMD
