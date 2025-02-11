@@ -1,13 +1,13 @@
 import typing as T
 
-import torch
 import numpy as np
+import torch
 from matplotlib import pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import Affine2D
 
-from waymo_loader.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES
+from data_utils.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES
 
 
 def plot_oriented_box(ax, x, y, orientation, length, width, color="blue", alpha=0.5, zorder=1):
@@ -125,6 +125,8 @@ def plot_scene(single_sample, predicted_positions: T.Optional[torch.Tensor] = No
     ax = plt.gca()
     for state in current_states:
         x, y, length, width, orientation, _, _ = state
+        
+        # orientation = np.arctan2(s, c)
         plot_oriented_box(
             ax,
             x,

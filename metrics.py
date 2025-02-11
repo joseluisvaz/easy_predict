@@ -6,7 +6,7 @@ from waymo_open_dataset.protos import motion_metrics_pb2
 
 import tensorflow as tf
 from torch import Tensor as TorchTensor
-from waymo_loader.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES, SUBSAMPLE_SEQUENCE 
+from data_utils.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES, SUBSAMPLE_SEQUENCE 
 
 
 def _default_metrics_config():

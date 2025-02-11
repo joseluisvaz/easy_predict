@@ -6,21 +6,19 @@ import numpy as np
 from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
 
 # from utils.geometry import get_transformation_matrix
-from waymo_loader.feature_description import NUM_HISTORY_FRAMES
+from data_utils.feature_description import NUM_HISTORY_FRAMES
 
 
 def perturb_pose(perturbation_se2, batch: T.Dict[str, np.ndarray]):
     """Perturb the pose of the agents in the batch"""
     perturbation_so2 = get_so2_from_se2(perturbation_se2)
-    relative_yaw = get_yaw_from_se2(perturbation_se2)
 
     # Modify geometrical properties for agent features
     avails = batch["gt_states_avails"]
     positions = batch["gt_states"][avails, :2]
-    velocities = batch["gt_states"][avails, 5:7]
+    directions = batch["gt_states"][avails, 2:4]
     batch["gt_states"][avails, :2] = transform_points(positions, perturbation_se2)
-    batch["gt_states"][avails, 5:7] = transform_points(velocities, perturbation_so2)
-    batch["gt_states"][avails, 4] += relative_yaw
+    batch["gt_states"][avails, 2:4] = transform_points(directions, perturbation_so2)
 
     # Modify geometrical properties for map features
     map_avails = batch["roadgraph_features_mask"]
@@ -80,7 +78,8 @@ class AnchorFrameAugmentation(DataAugmentation):
         selected_agent_id = np.random.choice(agent_indices[available_and_predictable])
 
         centroid = data["gt_states"][selected_agent_id, NUM_HISTORY_FRAMES, :2]
-        yaw = data["gt_states"][selected_agent_id, NUM_HISTORY_FRAMES, 4]
+        current_dir = data["gt_states"][selected_agent_id, NUM_HISTORY_FRAMES, 2:4]
+        yaw = np.arctan2(current_dir[..., 1], current_dir[..., 0])
 
         transformation_matrix = get_transformation_matrix(centroid, yaw)
         perturb_pose(transformation_matrix, data)

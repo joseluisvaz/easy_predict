@@ -12,14 +12,9 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
 
-from common_utils.geometry import (
-    get_so2_from_se2,
-    get_transformation_matrix,
-    get_yaw_from_se2,
-    transform_points,
-)
+from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
 from common_utils.tensor_utils import force_pad_batch_size
-from waymo_loader.feature_description import (
+from data_utils.feature_description import (
     _ROADGRAPH_TYPE_TO_IDX,
     NUM_HISTORY_FRAMES,
     ROADGRAPH_FEATURES,
@@ -374,11 +369,12 @@ def _generate_features(
     if train_with_tracks_to_predict:
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
-
+        
+    
     return {
         "gt_states": agent_features.gt_states.astype(
             np.float32
-        ),  # [N_AGENTS, TIME, FEATS=7] (x, y, length, width, bbox_yaw, velocity_x, velocity_y)
+        ),  # [N_AGENTS, TIME, FEATS=7] (x, y, cos(yaw), sin(yaw), speed, length, width)
         "gt_states_avails": agent_features.gt_states_avails.astype(np.bool_),  # [N_AGENTS, TIME]
         "actor_type": agent_features.actor_type.astype(np.int64),  # [N_AGENTS,]
         "is_sdc": agent_features.is_sdc.astype(np.bool_),  # [N_AGENTS,]

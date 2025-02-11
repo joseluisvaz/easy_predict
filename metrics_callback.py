@@ -11,10 +11,10 @@ from torch.utils.data import DataLoader
 from torchinfo import summary
 
 from common_utils.visualization import plot_scene
+from data_utils.feature_description import NUM_HISTORY_FRAMES
+from data_utils.feature_generation import collate_waymo
+from data_utils.processed_dataset import ProcessedDataset
 from models.inference import run_model_forward_pass
-from waymo_loader.dataloaders import collate_waymo
-from waymo_loader.dataset import ProcessedDataset
-from waymo_loader.feature_description import NUM_HISTORY_FRAMES
 
 
 class OnTrainCallback(L.Callback):
@@ -35,7 +35,7 @@ class OnTrainCallback(L.Callback):
         batch = next(iter(self._dataloader))
         batch = {k: v.cuda() for k, v in batch.items()}
 
-        history_states = batch["gt_states"][:, :, : NUM_HISTORY_FRAMES + 1]
+        history_states = batch["gt_features"][:, :, : NUM_HISTORY_FRAMES + 1]
         history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
         summary(
             pl_module.model,

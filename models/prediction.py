@@ -7,7 +7,6 @@ import torch.nn.functional as F
 from models.attention import CrossAttentionBlock, SelfAttentionBlock
 from models.polyline_encoder import PointNetPolylineEncoder, build_mlps
 from models.rnn_cells import MultiAgentLSTMCell
-from waymo_loader.feature_description import GT_STATES_MEANS, GT_STATES_STDS, ROADGRAPH_MEANS, ROADGRAPH_STDS
 
 
 def concatenate_historical_features(history_states: torch.Tensor, actor_types: torch.Tensor):
@@ -123,7 +122,7 @@ class PredictionModel(nn.Module):
         self.polyline_encoder = PointNetPolylineEncoder(
             24, 64, num_layers=5, num_pre_layers=3, out_channels=128
         )
-     
+
         # Attention mechanisms
         self.polyline_interaction = CrossAttentionBlock(
             embed_dim=hidden_size, num_heads=8, dropout_p=0.0
@@ -160,7 +159,7 @@ class PredictionModel(nn.Module):
 
         # Encode actors into their embedding using an RNN
         hidden_actors, context_actors = self.encoder(history_features, history_availabilities)
-        
+
         # Attend actor to polylines, output size of actors
         attend_to_polyline = self.polyline_interaction(
             hidden_actors, hidden_polyline, cross_mask=~polyline_avails

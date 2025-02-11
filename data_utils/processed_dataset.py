@@ -4,9 +4,8 @@ import h5py
 import numpy as np
 from torch.utils.data import Dataset
 
-from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
 from common_utils.tensor_utils import force_pad_batch_size
-from waymo_loader.data_augmentation.data_augmentation import (
+from data_utils.data_augmentation import (
     AnchorFrameAugmentation,
     BaseFrameAugmentation,
     ComposedAugmentation,
@@ -31,6 +30,68 @@ def mask_only_target_agents_and_sdc(batch: T.Dict[str, np.ndarray]) -> T.Dict[st
     batch["is_sdc"] = force_pad_batch_size(batch["is_sdc"], MAX_N_AGENTS)
     batch["tracks_to_predict"] = force_pad_batch_size(batch["tracks_to_predict"], MAX_N_AGENTS)
     return batch
+
+
+# def _generate_agent_features(
+#     gt_states: np.ndarray, gt_states_avails: np.ndarray
+# ) -> T.Dict[str, np.ndarray]:
+#     xy = gt_states[..., :2]
+#     length_and_width = gt_states[..., 2:4]
+#     yaws = gt_states[..., 4, None]
+#     velocities = gt_states[..., 5:7]
+
+#     # Get the sign of the speed (is car going forwards?)
+#     # speed = np.linalg.norm(velocities, axis=-1, keepdims=True)
+#     # speed_sign = np.sign(velocities[..., 0, None] * np.cos(yaws) + velocities[..., 1, None] * np.sin(yaws))
+
+#     # features = np.concatenate((xy, np.cos(yaws), np.sin(yaws), speed_sign * speed, length_and_width), axis=-1)
+#     features = np.concatenate(
+#         (xy, np.cos(yaws), np.sin(yaws), velocities, length_and_width), axis=-1
+#     )
+#     # features = np.concatenate((xy, length_and_width, yaws, velocities), axis=-1)
+#     return features * gt_states_avails[..., None]
+
+
+def _generate_agent_features(
+    gt_states: np.ndarray, gt_states_avails: np.ndarray, delta_t: float = 0.2
+) -> T.Tuple[np.ndarray, np.ndarray]:
+    """Concatenate history and future data from the batch and compute a state of the form
+             {x, y, cos, sin, signed_speed}
+    Returns:
+     (features, availabilities) [Tensor, Tensor]
+    """
+
+    availabilities = gt_states_avails.copy()
+
+    # Get rid of the last element of every sequence because the velocity will be corrupted
+    left_shit_avails = np.concatenate(
+        (availabilities[..., 1:], np.zeros_like(availabilities[..., 0, None]).astype(np.bool_)),
+        axis=-1,
+    )
+    availabilities = np.logical_and(availabilities, left_shit_avails)
+
+    positions = gt_states[..., :2]
+    length_width = gt_states[..., 2:4]
+    yaws = gt_states[..., 4, None]
+
+    # To compute velocities do integration with the previous timestep
+    # s(t+1) = s(t) + v(t) * dt
+    # v(t) = (s(t+1) - s(t)) / dt
+    velocities = (positions[:, 1:] - positions[:, :-1]) / delta_t
+    # Append zero to last velocities
+    velocities = np.concatenate((velocities, np.zeros_like(velocities[:, 0, None])), axis=-2)
+
+    # Get the sign of the speed (is car going forwards?)
+    speed = np.linalg.norm(velocities, axis=-1, keepdims=True)
+    speed_sign = np.sign(
+        velocities[..., 0, None] * np.cos(yaws) + velocities[..., 1, None] * np.sin(yaws)
+    )
+
+    # Get full state representation
+    features = np.concatenate((positions, np.cos(yaws), np.sin(yaws), speed_sign * speed, length_width), axis=-1)
+    features = features * availabilities[..., None]
+
+    return features.astype(np.float32), availabilities.astype(np.bool_)
 
 
 class ProcessedDataset(Dataset):
@@ -111,6 +172,12 @@ class ProcessedDataset(Dataset):
 
         if self.train_with_tracks_to_predict:
             batch = mask_only_target_agents_and_sdc(batch)
+
+        # Generate the agent sequence features, these are different than gt_states and we can change
+        # them to do some feature engineering
+        batch["gt_features"], batch["gt_states_avails"] = _generate_agent_features(
+            batch["gt_states"], batch["gt_states_avails"]
+        )
 
         return batch
 

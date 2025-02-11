@@ -24,11 +24,10 @@ from torch.utils.data import DataLoader
 from metrics import MotionMetrics, _default_metrics_config
 from metrics_callback import OnTrainCallback
 from models.inference import run_model_forward_pass
-from models.multipath import MultiPathPP
 from models.prediction import PredictionModel
-from waymo_loader.dataloaders import collate_waymo
-from waymo_loader.dataset import ProcessedDataset
-from waymo_loader.feature_description import NUM_FUTURE_FRAMES
+from data_utils.feature_generation import collate_waymo
+from data_utils.processed_dataset import ProcessedDataset
+from data_utils.feature_description import NUM_FUTURE_FRAMES
 
 plt.style.use("dark_background")
 torch.autograd.set_detect_anomaly(True)
@@ -64,7 +63,8 @@ def compute_loss(
 
 task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
 
-MAX_PREDICT_AGENTS = 8
+MAX_PREDICT_AGENTS: T.Final[int] = 8
+AGENT_INPUT_FEATURES: T.Final[int] = 12
 
 
 class LightningModule(L.LightningModule):
@@ -77,7 +77,7 @@ class LightningModule(L.LightningModule):
         self.n_timesteps = NUM_FUTURE_FRAMES
         self.batch_size = hyperparameters.batch_size
         self.model = PredictionModel(
-            input_features=12,
+            input_features=AGENT_INPUT_FEATURES,
             hidden_size=hyperparameters.hidden_size,
             n_timesteps=self.n_timesteps,
             normalize=hyperparameters.normalize_features

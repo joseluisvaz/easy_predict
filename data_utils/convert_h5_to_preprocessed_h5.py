@@ -6,7 +6,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from waymo_loader.dataloaders import WaymoH5Dataset, collate_waymo
+from data_utils.feature_generation import WaymoH5Dataset, collate_waymo
 
 BATCH_SIZE = 256
 NUM_WORKERS = 16
@@ -46,6 +46,7 @@ def _append_to_h5_datasets(file: h5py.File, batch_data: T.Dict[str, np.ndarray])
 
 def main(data_dir: str, out: str):
 
+    # Set train_with_tracks_to_predict to False to generate the data with the 128 full agent data
     dataset = WaymoH5Dataset(data_dir, train_with_tracks_to_predict=False)
     dataloader = DataLoader(
         dataset,

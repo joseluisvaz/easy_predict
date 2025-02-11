@@ -1,16 +1,16 @@
+import multiprocessing as mp
 import pathlib
-from argparse import ArgumentParser, Namespace
 import typing as T
+from argparse import ArgumentParser, Namespace
+from concurrent.futures import ThreadPoolExecutor
 
 import h5py
-import zarr
 import numpy as np
 import tensorflow as tf
-import multiprocessing as mp
-from concurrent.futures import ThreadPoolExecutor
+import zarr
+from feature_description import ROADGRAPH_FEATURES, STATE_FEATURES, get_feature_description
 from tqdm import tqdm
 
-from feature_description import get_feature_description, STATE_FEATURES, ROADGRAPH_FEATURES
 
 VALIDATION_LENGTH = 44102
 BATCH_SIZE = 200  # Adjust the batch size as needed

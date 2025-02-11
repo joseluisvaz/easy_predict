@@ -2,8 +2,8 @@ import typing as T
 
 import torch
 
+from data_utils.feature_description import NUM_HISTORY_FRAMES
 from models.prediction import PredictionModel
-from waymo_loader.feature_description import NUM_HISTORY_FRAMES
 
 
 def run_model_forward_pass(
@@ -18,7 +18,7 @@ def run_model_forward_pass(
     Returns:
         torch.Tensor: _description_
     """
-    history_states = batch["gt_states"][:, :, : NUM_HISTORY_FRAMES + 1, :]
+    history_states = batch["gt_features"][:, :, : NUM_HISTORY_FRAMES + 1, :]
     history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
     roadgraph_feats = batch["roadgraph_features"]
     roadgraph_avails = batch["roadgraph_features_mask"]
