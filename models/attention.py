@@ -2,6 +2,8 @@ import torch
 import math
 from torch import nn, Tensor
 
+import typing as T
+
 class NewGELU(nn.Module):
     """
     Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
@@ -32,12 +34,13 @@ class SelfAttentionBlock(nn.Module):
         m = self.mlp
         self.mlpf = lambda x: m.dropout(m.c_downproj(m.act(m.c_upproj(x))))  # MLP forward
 
-    def forward(self, x: Tensor, mask: Tensor) -> Tensor:
+    def forward(self, x: Tensor, mask: Tensor, pos_embedding: T.Optional[Tensor] = None) -> Tensor:
         """Interaction block for cross attention
         x: embedding
         cross_mask: mask for embedding, representing the keys
         """
-        attention, _ = self.mha(query=x, key=x, value=x, key_padding_mask=mask)
+        q = k = x + pos_embedding if pos_embedding is not None else x
+        attention, _ = self.mha(query=q, key=k, value=x, key_padding_mask=mask)
         x = x + attention
         x = x + self.mlpf(x)
         return x

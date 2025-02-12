@@ -1,6 +1,6 @@
 # Train arguments
 max_epochs: 30
-batch_size: 128
+batch_size: 64
 accumulate_grad_batches: 1
 learning_rate: 0.0002
 weight_decay: 0.01

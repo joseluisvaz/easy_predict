@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from models.attention import CrossAttentionBlock, SelfAttentionBlock
 from models.modules import DynamicsLayer
 from models.polyline_encoder import PointNetPolylineEncoder, build_mlps
+from models.position_embeddings import gen_sineembed_for_position
 from models.rnn_cells import MultiAgentLSTMCell
 
 
@@ -76,8 +77,8 @@ class Decoder(nn.Module):
             config.dynamics_layer.max_yaw_rate,
         )
 
-        # Attention mechanisms
-        self.polyline_interaction = CrossAttentionBlock(
+        # Attention mechanism to attend to the context vectors
+        self.context_attention = CrossAttentionBlock(
             embed_dim=hidden_size, num_heads=8, dropout_p=0.0
         )
 
@@ -96,23 +97,26 @@ class Decoder(nn.Module):
         return next_state
 
     def forward(
-        self, current_features, current_availabilities, hidden, context, map_embedding, map_avails
+        self, current_features, current_availabilities, context_embeddings, context_avails
     ):
 
         current_state = current_features.clone()
 
+        n_batch, n_agents, _ = current_state.shape
+        h = torch.zeros(n_batch, n_agents, self.hidden_size).to(current_state.device)
+        c = torch.zeros(n_batch, n_agents, self.hidden_size).to(current_state.device)
+
         outputs = []
         for t in range(self.n_timesteps):
             state_embedding = self.state_encoder(current_state)
-            state_embedding = self.polyline_interaction(
-                state_embedding, map_embedding, cross_mask=~map_avails
+
+            state_embedding = self.context_attention(
+                state_embedding, context_embeddings, cross_mask=~context_avails
             )
 
-            hidden, context = self.lstm_cell(
-                state_embedding, (hidden, context), current_availabilities
-            )
+            h, c = self.lstm_cell(state_embedding, (h, c), current_availabilities)
 
-            action = self.linear(hidden)
+            action = self.linear(h)
             current_state = self.step_physical_state(current_state, action)
 
             outputs.append(current_state)
@@ -130,19 +134,19 @@ class PredictionModel(nn.Module):
         self, input_features, hidden_size, n_timesteps, model_config, normalize: bool = False
     ):
         super(PredictionModel, self).__init__()
-        self.encoder = Encoder(input_features, hidden_size)
+        self.hidden_size = hidden_size
+        # self.encoder = Encoder(input_features, hidden_size)
         self.decoder = Decoder(hidden_size, n_timesteps, model_config)
 
         # Map encoder, same parameters as in the MTR repository
-        self.polyline_encoder = PointNetPolylineEncoder(
-            24, 64, num_layers=5, num_pre_layers=3, out_channels=128
+        self.actor_encoder = PointNetPolylineEncoder(
+            input_features, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
+        )
+        self.map_encoder = PointNetPolylineEncoder(
+            24, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
         )
 
-        # Attention mechanisms
-        self.polyline_interaction = CrossAttentionBlock(
-            embed_dim=hidden_size, num_heads=8, dropout_p=0.0
-        )
-        self.actor_interaction = CrossAttentionBlock(
+        self.global_attention = SelfAttentionBlock(
             embed_dim=hidden_size, num_heads=8, dropout_p=0.0
         )
 
@@ -167,31 +171,22 @@ class PredictionModel(nn.Module):
         current_features = history_features[:, :, -1].clone()
         current_availabilities = history_availabilities[:, :, -1]
 
+        actor_avails = torch.any(history_availabilities, dim=2)
         polyline_avails = torch.any(map_avails, dim=2)
 
-        # Encode map into its own embedding
-        hidden_polyline = self.polyline_encoder(map_feats, map_avails)  # [N_BATCH, N_POLYLINES]
+        hidden_actor = self.actor_encoder(history_features, history_availabilities)
+        hidden_map = self.map_encoder(map_feats, map_avails)  # [N_BATCH, N_POLYLINES]
 
-        # Encode actors into their embedding using an RNN
-        hidden_actors, context_actors = self.encoder(history_features, history_availabilities)
+        global_features = torch.cat([hidden_actor, hidden_map], dim=1)
+        global_avails = torch.cat([actor_avails, polyline_avails], dim=1)
 
-        # Attend actor to polylines, output size of actors
-        attend_to_polyline = self.polyline_interaction(
-            hidden_actors, hidden_polyline, cross_mask=~polyline_avails
-        )
+        # Perform self attention on all the features before sending it to the cross attention mask
+        global_features = self.global_attention(global_features, mask=~global_avails)
 
-        # For now decoder only takes positions
-        attend_to_actors = self.actor_interaction(
-            hidden_actors,
-            attend_to_polyline,
-            cross_mask=~current_availabilities,
-        )
         output = self.decoder(
             current_features,
             current_availabilities,
-            attend_to_actors,
-            context_actors,
-            hidden_polyline,
-            polyline_avails,
+            global_features,
+            global_avails,
         )
         return output
