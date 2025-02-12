@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from models.attention import CrossAttentionBlock, SelfAttentionBlock
+from models.modules import DynamicsLayer
 from models.polyline_encoder import PointNetPolylineEncoder, build_mlps
 from models.rnn_cells import MultiAgentLSTMCell
 
@@ -63,15 +64,17 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    INPUT_SIZE = 2  # x, y
-    OUTPUT_SIZE = 2  # dx, dy
-
-    def __init__(self, hidden_size, n_timesteps):
+    def __init__(self, hidden_size, n_timesteps, config):
         super(Decoder, self).__init__()
         self.lstm_cell = MultiAgentLSTMCell(128, hidden_size)
-        self.linear = nn.Linear(hidden_size, self.OUTPUT_SIZE)
+        self.linear = nn.Linear(hidden_size, config.decoder.output_size)
         self.n_timesteps = n_timesteps
         self.hidden_size = hidden_size
+        self.dynamics = DynamicsLayer(
+            config.dynamics_layer.delta_t,
+            config.dynamics_layer.max_acc,
+            config.dynamics_layer.max_yaw_rate,
+        )
 
         # Attention mechanisms
         self.polyline_interaction = CrossAttentionBlock(
@@ -79,20 +82,28 @@ class Decoder(nn.Module):
         )
 
         self.state_encoder = build_mlps(
-            self.INPUT_SIZE, [128, 64, 128], ret_before_act=True, without_norm=True
+            config.decoder.input_size, [128, 64, 128], ret_before_act=True, without_norm=True
         )
+
+    def step_physical_state(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
+        """Update the feature vector using the dynamics function, this copies all the features to the policy and
+        replaces the state with the new computed states
+        """
+        next_state = state.clone()
+        physical_state = self.dynamics.get_state_from_features(state)
+        next_physical_state = self.dynamics(physical_state, action)
+        next_state[..., : next_physical_state.shape[-1]] = next_physical_state
+        return next_state
 
     def forward(
         self, current_features, current_availabilities, hidden, context, map_embedding, map_avails
     ):
 
-        current_state = current_features[..., :2]  # x, y
+        current_state = current_features.clone()
 
         outputs = []
         for t in range(self.n_timesteps):
-
             state_embedding = self.state_encoder(current_state)
-
             state_embedding = self.polyline_interaction(
                 state_embedding, map_embedding, cross_mask=~map_avails
             )
@@ -101,7 +112,9 @@ class Decoder(nn.Module):
                 state_embedding, (hidden, context), current_availabilities
             )
 
-            current_state = current_state + self.linear(hidden)
+            action = self.linear(hidden)
+            current_state = self.step_physical_state(current_state, action)
+
             outputs.append(current_state)
 
         outputs = torch.stack(outputs, dim=2)
@@ -113,10 +126,12 @@ class PredictionModel(nn.Module):
     NUM_MCG_LAYERS = 4
     MAP_INPUT_SIZE = 20  # x, y, direction and one hot encoded type
 
-    def __init__(self, input_features, hidden_size, n_timesteps, normalize: bool = False):
+    def __init__(
+        self, input_features, hidden_size, n_timesteps, model_config, normalize: bool = False
+    ):
         super(PredictionModel, self).__init__()
         self.encoder = Encoder(input_features, hidden_size)
-        self.decoder = Decoder(hidden_size, n_timesteps)
+        self.decoder = Decoder(hidden_size, n_timesteps, model_config)
 
         # Map encoder, same parameters as in the MTR repository
         self.polyline_encoder = PointNetPolylineEncoder(

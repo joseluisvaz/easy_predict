@@ -5,11 +5,7 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from common_utils.tensor_utils import force_pad_batch_size
-from data_utils.data_augmentation import (
-    AnchorFrameAugmentation,
-    BaseFrameAugmentation,
-    ComposedAugmentation,
-)
+from data_utils.data_augmentation import AnchorFrameAugmentation, BaseFrameAugmentation, ComposedAugmentation
 
 
 def mask_only_target_agents_and_sdc(batch: T.Dict[str, np.ndarray]) -> T.Dict[str, np.ndarray]:
@@ -175,7 +171,7 @@ class ProcessedDataset(Dataset):
 
         # Generate the agent sequence features, these are different than gt_states and we can change
         # them to do some feature engineering
-        batch["gt_features"], batch["gt_states_avails"] = _generate_agent_features(
+        batch["gt_features"], batch["gt_features_avails"] = _generate_agent_features(
             batch["gt_states"], batch["gt_states_avails"]
         )
 

@@ -44,11 +44,11 @@ _ROADGRAPH_TYPE_TO_COLOR = {
     "Roadline-SolidSingleYellow": "yellow",
     "Roadline-SolidDoubleYellow": "yellow",
     "RoadLine-PassingDoubleYellow": "yellow",
-    "RoadEdgeBoundary": "red",
-    "RoadEdgeMedian": "red",
-    "StopSign": "orange",
+    "RoadEdgeBoundary": "purple",
+    "RoadEdgeMedian": "purple",
+    "StopSign": "red",
     "Crosswalk": "orange",
-    "SpeedBump": "orange",
+    "SpeedBump": "blue",
 }
 
 

@@ -12,7 +12,12 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
 
-from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
+from common_utils.geometry import (
+    get_so2_from_se2,
+    get_transformation_matrix,
+    get_yaw_from_se2,
+    transform_points,
+)
 from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.feature_description import (
     _ROADGRAPH_TYPE_TO_IDX,
@@ -55,6 +60,7 @@ ROADGRAPH_TYPES_TO_SUBSAMPLE = [
     "RoadLine-PassingDoubleYellow",
     "RoadEdgeBoundary",
     "RoadEdgeMedian",
+    "Crosswalk",
 ]
 
 MAX_NUM_POLYLINES: Final = 800
@@ -298,10 +304,30 @@ def _parse_roadgraph_features(
                 decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
         return decomposed
 
+    def _resample_ids(flattened_ids: np.ndarray, types: np.ndarray):
+        """Similar to the previous function but has a counter to populate the new ids"""
+        decomposed = []
+        id_counter = 1
+        for id in unique_ids:
+            indices = valid_ids == id
+            polyline_type = types[indices][0]  # Get the type of this polyline
+            subsample_factor = (
+                SUBSAMPLE_POLYLINE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
+            )
+
+            subsequence = _subsample_sequence(flattened_ids[indices], subsample_factor)
+            for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
+                decomposed.append(
+                    id_counter
+                    * np.ones_like(subsequence[i : i + MAX_POLYLINE_LENGTH]).astype(np.int16)
+                )
+                id_counter += 1
+        return decomposed
+
     chopped_polylines = _select_and_decompose_sequences(valid_points, valid_types)
     chopped_dirs = _select_and_decompose_sequences(valid_dirs, valid_types)
     chopped_types = _select_and_decompose_sequences(valid_types, valid_types)
-    chopped_ids = _select_and_decompose_sequences(valid_ids, valid_types)
+    chopped_ids = _resample_ids(valid_ids, valid_types)
     masks = [np.ones((len(seq), 1), dtype=np.bool8) for seq in chopped_polylines]
 
     def _nest_and_pad(
@@ -369,8 +395,7 @@ def _generate_features(
     if train_with_tracks_to_predict:
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
-        
-    
+
     return {
         "gt_states": agent_features.gt_states.astype(
             np.float32

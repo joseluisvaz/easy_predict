@@ -1,10 +1,8 @@
-
-
 import torch
 from torch import nn, Tensor
 
 class DynamicsLayer(nn.Module):
-    def __init__(self, delta_t: float, max_acc: float, max_yaw_rate: float, **kwargs: Any) -> None:
+    def __init__(self, delta_t: float, max_acc: float, max_yaw_rate: float) -> None:
         nn.Module.__init__(self)
 
         self.n_state = 5

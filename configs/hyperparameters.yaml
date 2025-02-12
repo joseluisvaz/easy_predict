@@ -22,10 +22,14 @@ data_perturb:
     delta_t: 10.0
     delta_yaw: 0.8
     
-# dynamics_layer:
-#   max_acc: 10.0
-#   max_yaw_rate: 1.0
-#   delta_t: 0.2
+model_config:
+  decoder:
+    input_size: 12   #(x, y, c, s, v, extent, type_ohe)
+    output_size: 2  #(accel, yaw_rate)
+  dynamics_layer:
+    max_acc: 10.0
+    max_yaw_rate: 1.0
+    delta_t: 0.2
 
 # Loss options
 loss_tracks_to_predict_mask: True  # True is standard WOMD

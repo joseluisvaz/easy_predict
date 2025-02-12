@@ -22,7 +22,7 @@ class OnTrainCallback(L.Callback):
         super().__init__()
 
         self._n_samples = 5
-        dataset = ProcessedDataset(datadir)
+        dataset = ProcessedDataset(datadir, train_with_tracks_to_predict=True)
         self._dataloader = DataLoader(
             dataset,
             batch_size=1,
@@ -59,7 +59,7 @@ class OnTrainCallback(L.Callback):
             predicted_positions = run_model_forward_pass(pl_module.model, single_sample_batch)
             self.log_plot_to_clearml(
                 pl_module,
-                pl_module.task.get_logger(),
+                pl_module.task.get_logger() if pl_module.task is not None else None,
                 single_sample_batch,
                 predicted_positions,
                 trainer.current_epoch,
@@ -73,13 +73,19 @@ class OnTrainCallback(L.Callback):
         pl_module.metrics.reset_state()
 
     def log_plot_to_clearml(
-        self, pl_module, logger, single_sample, predicted_positions, current_epoch, scene_idx: int
+        self,
+        pl_module: L.LightningModule,
+        logger: T.Optional[T.Any],
+        single_sample: T.Dict[str, torch.Tensor],
+        predicted_positions: torch.Tensor,
+        current_epoch: int,
+        scene_idx: int,
     ):
         """Creates the image of a single scenario and logs it to ClearML.
         Assumption: Each component of the scenario has the batch dimension of size 1
         """
 
-        plot_scene(single_sample, predicted_positions)
+        plot_scene(single_sample, predicted_positions, zoom_out=True)
 
         # Save the plot to an in-memory buffer
         buf = io.BytesIO()
@@ -91,6 +97,10 @@ class OnTrainCallback(L.Callback):
         image = Image.open(buf)
         if image.mode == "RGBA":
             image = image.convert("RGB")
-        logger.report_image(
-            title="sample", series=f"scene{scene_idx}", iteration=current_epoch, image=image
-        )
+            
+        if logger is not None:
+            logger.report_image(
+                title="sample", series=f"scene{scene_idx}", iteration=current_epoch, image=image
+            )
+        else:
+            image.save(f"data/visualizations/scene_{scene_idx}.png")
