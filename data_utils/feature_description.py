@@ -8,10 +8,10 @@ NUM_HISTORY_FRAMES = 10 // SUBSAMPLE_SEQUENCE
 NUM_FUTURE_FRAMES = 80 // SUBSAMPLE_SEQUENCE
 NUM_MAP_SAMPLES = 30000
 
-GT_STATES_MEANS = [16.9850,  2.4561,  4.4966,  2.0180,  1.6618,  0.5991, -0.0354]
-GT_STATES_STDS = [41.7659, 29.3103,  1.2764,  0.3939,  3.4035,  5.1634,  2.5289]
-ROADGRAPH_MEANS = [ 2.4929e+01,  2.6036e+00,  8.8117e-03, -1.2278e-03]
-ROADGRAPH_STDS = [63.7964, 36.8537,  0.7378,  0.6223]
+GT_STATES_MEANS = [16.9850, 2.4561, 4.4966, 2.0180, 1.6618, 0.5991, -0.0354]
+GT_STATES_STDS = [41.7659, 29.3103, 1.2764, 0.3939, 3.4035, 5.1634, 2.5289]
+ROADGRAPH_MEANS = [2.4929e01, 2.6036e00, 8.8117e-03, -1.2278e-03]
+ROADGRAPH_STDS = [63.7964, 36.8537, 0.7378, 0.6223]
 
 _ROADGRAPH_TYPE_TO_IDX = {
     "LaneCenter-Freeway": 1,
@@ -86,6 +86,18 @@ WAYMO_AGENT_TO_COLOR = {
     3: "black",  # other
 }
 
+TRAFFIC_LIGHT_STATE_MAP = {
+    0: "Unknown",
+    1: "Arrow_Stop",
+    2: "Arrow_Caution",
+    3: "Arrow_Go",
+    4: "Stop",
+    5: "Caution",
+    6: "Go",
+    7: "Flashing_Stop",
+    8: "Flashing_Caution",
+}
+
 ROADGRAPH_FEATURES = OrderedDict(
     [
         (
@@ -157,8 +169,14 @@ STATE_FEATURES = OrderedDict(
             "state/future/velocity_y",
             tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None),
         ),
-        ("state/future/speed", tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None)),
-        ("state/future/width", tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None)),
+        (
+            "state/future/speed",
+            tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None),
+        ),
+        (
+            "state/future/width",
+            tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None),
+        ),
         ("state/future/x", tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None)),
         ("state/future/y", tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None)),
         ("state/future/z", tf.io.FixedLenFeature([128, 80], tf.float32, default_value=None)),
@@ -181,23 +199,54 @@ STATE_FEATURES = OrderedDict(
     ]
 )
 
-TRAFFIC_LIGHT_FEATURES = {
-    "traffic_light_state/current/state": tf.io.FixedLenFeature(
-        [1, 16], tf.int64, default_value=None
-    ),
-    "traffic_light_state/current/valid": tf.io.FixedLenFeature(
-        [1, 16], tf.int64, default_value=None
-    ),
-    "traffic_light_state/current/x": tf.io.FixedLenFeature([1, 16], tf.float32, default_value=None),
-    "traffic_light_state/current/y": tf.io.FixedLenFeature([1, 16], tf.float32, default_value=None),
-    "traffic_light_state/current/z": tf.io.FixedLenFeature([1, 16], tf.float32, default_value=None),
-    "traffic_light_state/current/id": tf.io.FixedLenFeature([1, 16], tf.int64, default_value=None),
-    "traffic_light_state/past/state": tf.io.FixedLenFeature([10, 16], tf.int64, default_value=None),
-    "traffic_light_state/past/valid": tf.io.FixedLenFeature([10, 16], tf.int64, default_value=None),
-    "traffic_light_state/past/x": tf.io.FixedLenFeature([10, 16], tf.float32, default_value=None),
-    "traffic_light_state/past/y": tf.io.FixedLenFeature([10, 16], tf.float32, default_value=None),
-    "traffic_light_state/past/z": tf.io.FixedLenFeature([10, 16], tf.float32, default_value=None),
-}
+TRAFFIC_LIGHT_FEATURES = OrderedDict(
+    [
+        (
+            "traffic_light_state/current/state",
+            tf.io.FixedLenFeature([1, 16], tf.int64, default_value=None),
+        ),
+        (
+            "traffic_light_state/current/valid",
+            tf.io.FixedLenFeature([1, 16], tf.int64, default_value=None),
+        ),
+        (
+            "traffic_light_state/current/x",
+            tf.io.FixedLenFeature([1, 16], tf.float32, default_value=None),
+        ),
+        (
+            "traffic_light_state/current/y",
+            tf.io.FixedLenFeature([1, 16], tf.float32, default_value=None),
+        ),
+        (
+            "traffic_light_state/current/z",
+            tf.io.FixedLenFeature([1, 16], tf.float32, default_value=None),
+        ),
+        (
+            "traffic_light_state/current/id",
+            tf.io.FixedLenFeature([1, 16], tf.int64, default_value=None),
+        ),
+        (
+            "traffic_light_state/past/state",
+            tf.io.FixedLenFeature([10, 16], tf.int64, default_value=None),
+        ),
+        (
+            "traffic_light_state/past/valid",
+            tf.io.FixedLenFeature([10, 16], tf.int64, default_value=None),
+        ),
+        (
+            "traffic_light_state/past/x",
+            tf.io.FixedLenFeature([10, 16], tf.float32, default_value=None),
+        ),
+        (
+            "traffic_light_state/past/y",
+            tf.io.FixedLenFeature([10, 16], tf.float32, default_value=None),
+        ),
+        (
+            "traffic_light_state/past/z",
+            tf.io.FixedLenFeature([10, 16], tf.float32, default_value=None),
+        ),
+    ]
+)
 
 
 def get_feature_description() -> Dict:

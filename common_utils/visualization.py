@@ -61,7 +61,8 @@ def plot_scene(
         single_sample["gt_states_avails"][0, :, : NUM_HISTORY_FRAMES + 1].cpu().numpy()
     )
 
-    n_agents = history_states.shape[0]
+    # n_agents = history_states.shape[0]
+    n_agents = 8
 
     past_sequences = []
     ground_truth_sequences = []

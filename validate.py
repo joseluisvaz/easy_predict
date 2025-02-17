@@ -12,12 +12,13 @@ def main(use_gpu: bool, ckpt_path: str):
     hyperparameters = OmegaConf.load("configs/hyperparameters.yaml")
 
     module = (
-        LightningModule(False, hyperparameters, clearml_task=None)
+        LightningModule(False, hyperparameters, clearml_task=None, cosine_t_max=100)
         if not ckpt_path
         else LightningModule.load_from_checkpoint(
             ckpt_path,
             fast_dev_run=False,
             hyperparameters=hyperparameters,
+            cosine_t_max=100,
             clearml_task=None,
             map_location="cpu",
             limit_val_batches=0.1,

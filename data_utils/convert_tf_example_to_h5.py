@@ -8,9 +8,13 @@ import h5py
 import numpy as np
 import tensorflow as tf
 import zarr
-from feature_description import ROADGRAPH_FEATURES, STATE_FEATURES, get_feature_description
+from feature_description import (
+    ROADGRAPH_FEATURES,
+    STATE_FEATURES,
+    TRAFFIC_LIGHT_FEATURES,
+    get_feature_description,
+)
 from tqdm import tqdm
-
 
 VALIDATION_LENGTH = 44102
 BATCH_SIZE = 200  # Adjust the batch size as needed
@@ -33,6 +37,14 @@ def process_roadgraph_features(decoded_example: T.Dict[str, np.ndarray]) -> np.n
     return np.concatenate([decoded_example[key] for key in ROADGRAPH_FEATURES], axis=-1)
 
 
+def process_traffic_light_features(decoded_example: T.Dict[str, np.ndarray]) -> np.ndarray:
+    """Return the merged ordered map of traffic light features."""
+    # Transpose since traffic light data has the feature dimension as the first dim.
+    return np.concatenate(
+        [decoded_example[key].transpose() for key in TRAFFIC_LIGHT_FEATURES], axis=-1
+    )
+
+
 def process_merged_agent_features(decoded_example: T.Dict[str, np.ndarray]) -> np.ndarray:
     """Merge the agent features into a single numpy array."""
     processed_example = {}
@@ -52,14 +64,25 @@ def process_merged_agent_features(decoded_example: T.Dict[str, np.ndarray]) -> n
 def _generate_records_from_files(
     files: T.List[str],
 ) -> T.Generator[T.Tuple[np.ndarray, np.ndarray], None, None]:
-    """Generates the records from the files."""
+    """Generates the records from the files.
+
+    Returns: the agent, map and traffic light features, they are
+    concatenated in the last dimension so that we can easily decode
+    them when reading them from the h5 file. They are encoded as a
+    single tensor so that we do not have to jump between tables in
+    h5, this will render faster read speeds due to data locality.
+    """
     dataset = tf.data.TFRecordDataset(files, compression_type="")
 
     for payload in dataset.as_numpy_iterator():
         decoded_example = tf.io.parse_single_example(payload, get_feature_description())
+
         numpy_example = {key: value.numpy() for key, value in decoded_example.items()}
-        yield process_merged_agent_features(numpy_example), process_roadgraph_features(
-            numpy_example
+
+        yield (
+            process_merged_agent_features(numpy_example),
+            process_roadgraph_features(numpy_example),
+            process_traffic_light_features(numpy_example),
         )
 
 
@@ -81,13 +104,16 @@ def _create_h5_datasets(
     file: h5py.File, new_data: T.Tuple[np.ndarray, np.ndarray], max_agents: int = MAX_AGENTS
 ) -> None:
     """Create a dataset in the h5 file for every field in the new data sample."""
-    actor_data, roadgraph_data = new_data
+    actor_data, roadgraph_data, traffic_light_data = new_data
 
     actor_tensor = np.expand_dims(actor_data, axis=0)  # Add batch dimension
     actor_maxshape = (None, max_agents, *actor_tensor.shape[2:])
 
     roadgraph_tensor = np.expand_dims(roadgraph_data, axis=0)  # Add batch dimension
     roadgraph_maxshape = (None, *roadgraph_tensor.shape[1:])
+    
+    tl_tensor = np.expand_dims(traffic_light_data, axis=0)  # Add batch dimension
+    tl_maxshape = (None, *tl_tensor.shape[1:])
 
     file.create_dataset(
         "actor_merged_features",
@@ -103,6 +129,13 @@ def _create_h5_datasets(
         maxshape=roadgraph_maxshape,
         compression="gzip",
     )
+    file.create_dataset(
+        "tl_merged_features",
+        data=tl_tensor,
+        chunks=True,
+        maxshape=tl_maxshape,
+        compression="gzip",
+    )
 
 
 def _append_to_h5_datasets(
@@ -111,7 +144,6 @@ def _append_to_h5_datasets(
     """Append a batch of new data samples to the h5 file."""
 
     def add_to_dataset(dataset_name: str, batch_data: T.List[np.ndarray]) -> None:
-        tensors = [np.expand_dims(data, axis=0) for data in batch_data]
         tensors = [np.expand_dims(data, axis=0) for data in batch_data]  # Add batch dimension
         tensors = np.concatenate(tensors, axis=0)
         number_of_elements = file[dataset_name].shape[0]
@@ -120,8 +152,10 @@ def _append_to_h5_datasets(
 
     actor_data = [data[0] for data in batch_data]
     roadgraph_data = [data[1] for data in batch_data]
+    tl_data = [data[2] for data in batch_data]
     add_to_dataset("actor_merged_features", actor_data)
     add_to_dataset("roadgraph_merged_features", roadgraph_data)
+    add_to_dataset("tl_merged_features", tl_data)
 
 
 def _convert_to_h5(data_dir: str, out_path: str) -> None:

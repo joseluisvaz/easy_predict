@@ -156,6 +156,15 @@ class ProcessedDataset(Dataset):
             "roadgraph_features_ids": np.array(self.file["roadgraph_features_ids"][idx]).astype(
                 np.int16
             ),  # [N_POLYLINE,]
+            "tl_states": np.array(self.file["tl_states"][idx]).astype(
+                np.float32
+            ),  # [N_TRAFFIC_LIGHTS, TIME, 2]
+            "tl_states_categorical": np.array(self.file["tl_states_categorical"][idx]).astype(
+                np.int64
+            ),  # [N_TRAFFIC_LIGHTS, TIME,]
+            "tl_avails": np.array(self.file["tl_avails"][idx]).astype(
+                np.bool_
+            ),  # [N_TRAFFIC_LIGHTS, TIME,]
         }
 
         # Reverse the roadgraph features in case we want to use an RNN, this simulates left padding

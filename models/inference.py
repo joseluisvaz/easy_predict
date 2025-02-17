@@ -20,16 +20,18 @@ def run_model_forward_pass(
     """
     history_states = batch["gt_features"][:, :, : NUM_HISTORY_FRAMES + 1, :]
     history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
-    roadgraph_feats = batch["roadgraph_features"]
-    roadgraph_avails = batch["roadgraph_features_mask"]
 
     predicted_positions = model(
         history_states,
         history_avails,
         batch["actor_type"],
-        roadgraph_feats,
-        roadgraph_avails,
+        batch["roadgraph_features"],
+        batch["roadgraph_features_mask"],
         batch["roadgraph_features_types"],
+        batch["tl_states"],
+        batch["tl_states_categorical"],
+        batch["tl_avails"],
+        batch["tracks_to_predict"], 
     )
 
     return predicted_positions

@@ -22,7 +22,7 @@ class OnTrainCallback(L.Callback):
         super().__init__()
 
         self._n_samples = 5
-        dataset = ProcessedDataset(datadir, train_with_tracks_to_predict=True)
+        dataset = ProcessedDataset(datadir, train_with_tracks_to_predict=False)
         self._dataloader = DataLoader(
             dataset,
             batch_size=1,
@@ -31,23 +31,23 @@ class OnTrainCallback(L.Callback):
             collate_fn=collate_waymo,
         )
 
-    def on_train_start(self, trainer, pl_module):
-        batch = next(iter(self._dataloader))
-        batch = {k: v.cuda() for k, v in batch.items()}
+    # def on_train_start(self, trainer, pl_module):
+    #     batch = next(iter(self._dataloader))
+    #     batch = {k: v.cuda() for k, v in batch.items()}
 
-        history_states = batch["gt_features"][:, :, : NUM_HISTORY_FRAMES + 1]
-        history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
-        summary(
-            pl_module.model,
-            input_data=(
-                history_states,
-                history_avails,
-                batch["actor_type"],
-                batch["roadgraph_features"],
-                batch["roadgraph_features_mask"],
-                batch["roadgraph_features_types"],
-            ),
-        )
+    #     history_states = batch["gt_features"][:, :, : NUM_HISTORY_FRAMES + 1]
+    #     history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
+    #     summary(
+    #         pl_module.model,
+    #         input_data=(
+    #             history_states,
+    #             history_avails,
+    #             batch["actor_type"],
+    #             batch["roadgraph_features"],
+    #             batch["roadgraph_features_mask"],
+    #             batch["roadgraph_features_types"],
+    #         ),
+    #     )
 
     def on_validation_epoch_end(self, trainer, pl_module):
         for idx, single_sample_batch in enumerate(

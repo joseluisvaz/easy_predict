@@ -10,6 +10,8 @@ from models.polyline_encoder import PointNetPolylineEncoder, build_mlps
 from models.position_embeddings import gen_sineembed_for_position
 from models.rnn_cells import MultiAgentLSTMCell
 
+MAX_NUM_TRACKS_TO_PREDICT: T.Final = 8
+
 
 def concatenate_historical_features(history_states: torch.Tensor, actor_types: torch.Tensor):
     """Concatenate history states with one-hot encoded actor types"""
@@ -38,6 +40,23 @@ def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
     return torch.cat(
         [
             map_feats,
+            types_one_hot,
+        ],
+        axis=-1,
+    )
+
+def concatenate_tl_features(tl_feats: torch.Tensor, tl_types: torch.Tensor):
+    """Concatenate map_feats with one-hot encoded map types"""
+    # n_batch, n_tls, n_timesteps, _ = tl_feats.shape
+    # # types = tl_types.view(n_batch, n_tls, n_timesteps)
+    
+    # print(tl_types)
+    
+    NUM_CLASSES: T.Final = 9
+    types_one_hot = F.one_hot(tl_types, num_classes=NUM_CLASSES).float()
+    return torch.cat(
+        [
+            tl_feats,
             types_one_hot,
         ],
         axis=-1,
@@ -96,9 +115,7 @@ class Decoder(nn.Module):
         next_state[..., : next_physical_state.shape[-1]] = next_physical_state
         return next_state
 
-    def forward(
-        self, current_features, current_availabilities, context_embeddings, context_avails
-    ):
+    def forward(self, current_features, current_availabilities, context_embeddings, context_avails):
 
         current_state = current_features.clone()
 
@@ -145,6 +162,12 @@ class PredictionModel(nn.Module):
         self.map_encoder = PointNetPolylineEncoder(
             24, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
         )
+        
+        self.use_tl_encoder = model_config.tl_encoder.use_tl_encoder
+
+        self.tl_encoder = PointNetPolylineEncoder(
+            model_config.tl_encoder.input_size, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
+        ) if self.use_tl_encoder else None
 
         self.global_attention = SelfAttentionBlock(
             embed_dim=hidden_size, num_heads=8, dropout_p=0.0
@@ -160,6 +183,10 @@ class PredictionModel(nn.Module):
         roadgraph_features,
         roadgraph_features_mask,
         roadgraph_types,
+        tl_states,
+        tl_states_categorical,
+        tl_avails,
+        tracks_to_predict,
     ):
         # map_feats.shape is (batch, polyline, points, features)
         map_feats = roadgraph_features
@@ -168,20 +195,31 @@ class PredictionModel(nn.Module):
 
         history_features = concatenate_historical_features(history_states, actor_types)
         map_feats = concatenate_map_features(map_feats, map_types)
-        current_features = history_features[:, :, -1].clone()
-        current_availabilities = history_availabilities[:, :, -1]
+        tl_feats = concatenate_tl_features(tl_states, tl_states_categorical)
 
         actor_avails = torch.any(history_availabilities, dim=2)
         polyline_avails = torch.any(map_avails, dim=2)
 
         hidden_actor = self.actor_encoder(history_features, history_availabilities)
         hidden_map = self.map_encoder(map_feats, map_avails)  # [N_BATCH, N_POLYLINES]
-
-        global_features = torch.cat([hidden_actor, hidden_map], dim=1)
-        global_avails = torch.cat([actor_avails, polyline_avails], dim=1)
+        
+        if self.use_tl_encoder:
+            tl_persistent_avails = torch.any(tl_avails, dim=2)
+            hidden_tl = self.tl_encoder(tl_feats, tl_avails)  # [N_BATCH, N_TRAFFIC_LIGHTS]
+            global_features = torch.cat([hidden_actor, hidden_map, hidden_tl], dim=1)
+            global_avails = torch.cat([actor_avails, polyline_avails, tl_persistent_avails], dim=1)
+        else:
+            global_features = torch.cat([hidden_actor, hidden_map], dim=1)
+            global_avails = torch.cat([actor_avails, polyline_avails], dim=1)
 
         # Perform self attention on all the features before sending it to the cross attention mask
         global_features = self.global_attention(global_features, mask=~global_avails)
+
+        # Only predict the agents of interest only do not predict the agents that
+        # are not required to be predicted
+        current_features = history_features[:, :MAX_NUM_TRACKS_TO_PREDICT, -1].clone()
+        current_availabilities = history_availabilities[:, :MAX_NUM_TRACKS_TO_PREDICT, -1].clone()
+        current_availabilities = torch.logical_and(current_availabilities, tracks_to_predict[: , :MAX_NUM_TRACKS_TO_PREDICT])
 
         output = self.decoder(
             current_features,

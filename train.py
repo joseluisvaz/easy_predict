@@ -39,16 +39,19 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
 
     # Load if a checkpoint is provided
     module = (
-        LightningModule(fast_dev_run, hyperparameters, clearml_task=task)
+        LightningModule(fast_dev_run, hyperparameters, cosine_t_max=100, clearml_task=task)
         if not ckpt_path
         else LightningModule.load_from_checkpoint(
             ckpt_path,
-            fast_dev_run=fast_dev_run,
-            hyperparameters=hyperparameters,
+            # fast_dev_run=fast_dev_run,
+            # cosine_t_max=100,
+            # hyperparameters=hyperparameters,
             clearml_task=task,
             map_location="cpu",
         )
     )
+
+    module.cosine_t_max = hyperparameters.max_epochs * len(module.train_dataloader())
 
     checkpoint_callback = ModelCheckpoint(
         dirpath="checkpoints/",
@@ -86,7 +89,7 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
         print("LEARNING RATE SUGGESTION: ", new_lr)
         assert False, "Terminate the program to avoid training"
 
-    trainer.fit(model=module)
+    trainer.fit(model=module, ckpt_path=ckpt_path)
 
 
 def _parse_arguments() -> Namespace:

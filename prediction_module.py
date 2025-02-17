@@ -6,7 +6,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch import Tensor
 from torch.utils.data import DataLoader
 
-from data_utils.feature_description import NUM_FUTURE_FRAMES
+from data_utils.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES
 from data_utils.feature_generation import collate_waymo
 from data_utils.processed_dataset import ProcessedDataset
 from metrics import MotionMetrics, _default_metrics_config
@@ -18,21 +18,21 @@ def compute_loss(
     predicted_positions: torch.Tensor,
     target_positions: torch.Tensor,
     target_availabilities: torch.Tensor,
-    tracks_to_predict_mask: torch.Tensor,
-    is_sdc: torch.Tensor,
+    agent_mask: torch.Tensor,
     loss_tracks_to_predict_mask: bool,
     loss_use_ego_vehicle_mask: bool,
 ):
 
     total_mask = target_availabilities
+    total_mask *= agent_mask.unsqueeze(-1)
 
     # Use masks to hide agents out
-    if loss_use_ego_vehicle_mask and loss_tracks_to_predict_mask:
-        total_mask *= tracks_to_predict_mask.unsqueeze(-1) | is_sdc.unsqueeze(-1)
-    elif loss_use_ego_vehicle_mask:
-        total_mask *= is_sdc.unsqueeze(-1)
-    elif loss_tracks_to_predict_mask:
-        total_mask *= tracks_to_predict_mask.unsqueeze(-1)
+    # if loss_use_ego_vehicle_mask and loss_tracks_to_predict_mask:
+    #     total_mask *= tracks_to_predict_mask.unsqueeze(-1) | is_sdc.unsqueeze(-1)
+    # elif loss_use_ego_vehicle_mask:
+    #     total_mask *= is_sdc.unsqueeze(-1)
+    # elif loss_tracks_to_predict_mask:
+    #     total_mask *= tracks_to_predict_mask.unsqueeze(-1)
 
     # Sum over positions dimension
     errors = torch.sum((target_positions - predicted_positions) ** 2, dim=-1)
@@ -45,10 +45,15 @@ AGENT_INPUT_FEATURES: T.Final[int] = 12
 
 class LightningModule(L.LightningModule):
     def __init__(
-        self, fast_dev_run: bool, hyperparameters: DictConfig, clearml_task: T.Optional[T.Any]
+        self,
+        fast_dev_run: bool,
+        hyperparameters: DictConfig,
+        cosine_t_max: int,
+        clearml_task: T.Optional[T.Any],
     ):
         super().__init__()
         self.save_hyperparameters()
+        self.cosine_t_max = cosine_t_max
         self.task = clearml_task
         self.fast_dev_run = fast_dev_run
         self.learning_rate = hyperparameters.learning_rate
@@ -104,16 +109,28 @@ class LightningModule(L.LightningModule):
         predicted_features = run_model_forward_pass(self.model, batch)
         predicted_positions = predicted_features[..., :2]
 
+        MAX_NUM_TRACKS_TO_PREDICT: T.Final[int] = 8
         # Crop the future positions to match the number of timesteps
-        future_positions = batch["gt_features"][:, :, -NUM_FUTURE_FRAMES:, :2]
-        future_availabilities = batch["gt_features_avails"][:, :, -NUM_FUTURE_FRAMES:]
+        future_positions = batch["gt_features"][
+            :, :MAX_NUM_TRACKS_TO_PREDICT, -NUM_FUTURE_FRAMES:, :2
+        ]
+        future_availabilities = batch["gt_features_avails"][
+            :, :MAX_NUM_TRACKS_TO_PREDICT, -NUM_FUTURE_FRAMES:
+        ]
 
+        current_availabilities = batch["gt_features_avails"][
+            :, :MAX_NUM_TRACKS_TO_PREDICT, NUM_HISTORY_FRAMES
+        ]
+        tracks_to_predict = batch["tracks_to_predict"][:, :MAX_NUM_TRACKS_TO_PREDICT]
+        agent_mask = current_availabilities & tracks_to_predict
+
+        # batch["tracks_to_predict"][:, :MAX_NUM_TRACKS_TO_PREDICT],
+        # batch["is_sdc"][:, :MAX_NUM_TRACKS_TO_PREDICT],
         loss = compute_loss(
             predicted_positions,
             future_positions,
             future_availabilities,
-            batch["tracks_to_predict"],
-            batch["is_sdc"],
+            agent_mask,
             self.hyperparameters.loss_tracks_to_predict_mask,
             self.hyperparameters.loss_use_ego_vehicle_mask,
         )
@@ -149,7 +166,16 @@ class LightningModule(L.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.learning_rate, weight_decay=self.hyperparameters.weight_decay
         )
-        return optimizer
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.cosine_t_max)
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "monitor": "loss/train",
+                "interval": "step",
+                "frequency": 1,
+            },
+        }
 
     def train_dataloader(self):
         dataset = ProcessedDataset(
