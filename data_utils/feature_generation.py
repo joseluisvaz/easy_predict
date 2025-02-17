@@ -12,7 +12,12 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
 
-from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
+from common_utils.geometry import (
+    get_so2_from_se2,
+    get_transformation_matrix,
+    get_yaw_from_se2,
+    transform_points,
+)
 from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.feature_description import (
     _ROADGRAPH_TYPE_TO_IDX,
@@ -364,6 +369,59 @@ def _parse_roadgraph_features(
     }
 
 
+def _parse_traffic_light_features(
+    decoded_example: Dict[str, np.ndarray], to_agent_se3: np.ndarray
+) -> Dict[str, np.ndarray]:
+    past_tl_pos = np.stack(
+        (
+            decoded_example["traffic_light_state/past/x"],
+            decoded_example["traffic_light_state/past/y"],
+        ),
+        axis=-1,
+    )
+    current_tl_pos = np.stack(
+        (
+            decoded_example["traffic_light_state/current/x"],
+            decoded_example["traffic_light_state/current/y"],
+        ),
+        axis=-1,
+    )
+    tl_pos = np.concatenate((past_tl_pos, current_tl_pos), axis=1)
+
+    tl_states_categorical = np.concatenate(
+        (
+            decoded_example["traffic_light_state/past/state"],
+            decoded_example["traffic_light_state/current/state"],
+        ),
+        axis=1,
+    )
+    tl_avails = np.concatenate(
+        (
+            decoded_example["traffic_light_state/past/valid"],
+            decoded_example["traffic_light_state/current/valid"],
+        ),
+        axis=1,
+    )
+
+    tl_pos = tl_pos[:, ::SUBSAMPLE_SEQUENCE]
+    tl_states_categorical = tl_states_categorical[:, ::SUBSAMPLE_SEQUENCE]
+    tl_avails = tl_avails[:, ::SUBSAMPLE_SEQUENCE].astype(np.bool_)
+
+    # Invalid values are set as -1 so get rid of them by multiplying by 0
+    tl_pos *= tl_avails[..., None].astype(np.int16)
+    tl_states_categorical *= tl_avails.astype(np.int16)
+
+    tl_pos[tl_avails] = transform_points(tl_pos[tl_avails], to_agent_se3)
+    assert len(tl_pos.shape) == 3, "tmp assert"
+    assert tl_states_categorical.shape[1] == 6, "tmp assert"
+
+    return {
+        "tl_states": tl_pos,  # [N_TRAFFIC_LIGHTS, TIME, 2]
+        "tl_states_categorical": tl_states_categorical,  # [N_TRAFFIC_LIGHTS, TIME]
+        "tl_avails": tl_avails,  # [N_TRAFFIC_LIGHTS, TIME]
+    }
+
+
 def _generate_features(
     decoded_example: Dict[str, np.ndarray], train_with_tracks_to_predict: bool = False
 ) -> Dict[str, np.ndarray]:
@@ -378,41 +436,21 @@ def _generate_features(
     agent_features_current_state = agent_features.gt_states[:, NUM_HISTORY_FRAMES]
 
     # Transform the scene to have the ego vehicle at the origin
-    ego_idx = np.argmax(agent_features.is_sdc.squeeze())
-    to_sdc_se3 = get_transformation_matrix(
-        agent_features_current_state[ego_idx, :2],  # x, y
-        agent_features_current_state[ego_idx, 4],  # yaw
+    agent_idx = np.argmax(agent_features.is_sdc.squeeze())
+    to_agent_se3 = get_transformation_matrix(
+        agent_features_current_state[agent_idx, :2],  # x, y
+        agent_features_current_state[agent_idx, 4],  # yaw
     )
-    agent_features.transform_with_se3(to_sdc_se3)
+    agent_features.transform_with_se3(to_agent_se3)
 
     valid_positions = agent_features.gt_states[agent_features.gt_states_avails][:, :2]
-    map_features = _parse_roadgraph_features(decoded_example, to_sdc_se3, valid_positions)
+    map_features = _parse_roadgraph_features(decoded_example, to_agent_se3, valid_positions)
+    tl_features = _parse_traffic_light_features(decoded_example, to_agent_se3)
 
     if train_with_tracks_to_predict:
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
-    
-    # TODO: make this a function
-    
-    past_tl_pos = np.stack((decoded_example["traffic_light_state/past/x"], decoded_example["traffic_light_state/past/y"]), axis=-1)
-    current_tl_pos = np.stack((decoded_example["traffic_light_state/current/x"], decoded_example["traffic_light_state/current/y"]), axis=-1)
-    tl_pos = np.concatenate((past_tl_pos, current_tl_pos), axis=1)
-    
-    tl_states_categorical = np.concatenate((decoded_example["traffic_light_state/past/state"], decoded_example["traffic_light_state/current/state"]), axis=1)
-    tl_avails = np.concatenate((decoded_example["traffic_light_state/past/valid"], decoded_example["traffic_light_state/current/valid"]), axis=1)
-    
-    tl_pos = tl_pos[:, ::SUBSAMPLE_SEQUENCE]
-    tl_states_categorical = tl_states_categorical[:, ::SUBSAMPLE_SEQUENCE]
-    tl_avails = tl_avails[:, ::SUBSAMPLE_SEQUENCE].astype(np.bool_)
-    
-    # Invalid values are set as -1 so get rid of them by multiplying by 0
-    tl_pos *= tl_avails[..., None].astype(np.int16)
-    tl_states_categorical *= tl_avails.astype(np.int16)
-    
-    tl_pos[tl_avails] = transform_points(tl_pos[tl_avails], to_sdc_se3)
-    assert len(tl_pos.shape) == 3, "tmp assert"
-    assert tl_states_categorical.shape[1] == 6, "tmp assert"
-    
+
     return {
         "gt_states": agent_features.gt_states.astype(
             np.float32
@@ -433,9 +471,11 @@ def _generate_features(
         "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(
             np.int16
         ),  # [N_POLYLINE,]
-        "tl_states": tl_pos.astype(np.float32),  # [N_TRAFFIC_LIGHTS, TIME, 2]
-        "tl_states_categorical": tl_states_categorical.astype(np.int64),  # [N_TRAFFIC_LIGHTS, TIME]
-        "tl_avails": tl_avails.astype(np.bool_),  # [N_TRAFFIC_LIGHTS, TIME]
+        "tl_states": tl_features["tl_states"].astype(np.float32),  # [N_TRAFFIC_LIGHTS, TIME, 2]
+        "tl_states_categorical": tl_features["tl_states_categorical"].astype(
+            np.int64
+        ),  # [N_TRAFFIC_LIGHTS, TIME]
+        "tl_avails": tl_features["tl_avails"].astype(np.bool_),  # [N_TRAFFIC_LIGHTS, TIME]
     }
 
 
@@ -453,12 +493,12 @@ def parse_concatenated_tensor(
     for feature_name, feature_descriptor in feature_dict.items():
         shape = feature_descriptor.shape
         assert len(shape) <= 2, "feature shape should be at most 2D"
-        
+
         if not batch_first:
             # e.g. traffic lights have the collection dimension as the second dim. but we
             # transpose it for encoding.
             shape = shape[::-1]
-        
+
         feature_length = shape[1] if len(shape) > 1 else 1
 
         end_idx = start_idx + feature_length
@@ -505,4 +545,3 @@ class WaymoH5Dataset(Dataset):
         return _generate_features(
             data_fetched, train_with_tracks_to_predict=self.train_with_tracks_to_predict
         )
-
