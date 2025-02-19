@@ -2,15 +2,16 @@
 max_epochs: 500
 batch_size: 64
 accumulate_grad_batches: 1
-learning_rate: 0.0002
+learning_rate: 0.001
 weight_decay: 0.01
 grad_norm_clip: 5.0
 eta_min: 1.0E-5
 normalize_features: False
 
 # Data arguments
-train_dataset: data/processed/training_diff_tl.h5
-val_dataset: data/processed/validation_diff_tl.h5
+# train_dataset: data/processed/training_diff_tl.h5
+train_dataset: data/processed/training_diff_tl_w_index.h5
+val_dataset: data/processed/validation_diff_tl_w_index.h5
 train_with_tracks_to_predict: False # instead of 128 elements use 8, False is standard WOMD training
 num_workers: 16
 

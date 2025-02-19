@@ -12,12 +12,7 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
 
-from common_utils.geometry import (
-    get_so2_from_se2,
-    get_transformation_matrix,
-    get_yaw_from_se2,
-    transform_points,
-)
+from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
 from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.feature_description import (
     _ROADGRAPH_TYPE_TO_IDX,
@@ -450,6 +445,11 @@ def _generate_features(
     if train_with_tracks_to_predict:
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
+        
+    current_avails = agent_features.gt_states_avails[:, NUM_HISTORY_FRAMES].astype(np.bool_)
+    tracks_to_predict = agent_features.tracks_to_predict.astype(np.bool_)
+    assert np.all(current_avails[tracks_to_predict])
+
 
     return {
         "gt_states": agent_features.gt_states.astype(
@@ -479,7 +479,13 @@ def _generate_features(
     }
 
 
-def collate_waymo(payloads: List[Any]) -> Dict[str, Tensor]:
+def collate_waymo_concatenate(payloads: List[Any]) -> Dict[str, Tensor]:
+    collated_batch = {}
+    for key in payloads[0]:
+        collated_batch[key] = np.concatenate([payload[key] for payload in payloads])
+    return default_convert(collated_batch)
+
+def collate_waymo_stack(payloads: List[Any]) -> Dict[str, Tensor]:
     return default_convert(default_collate(payloads))
 
 
@@ -542,6 +548,10 @@ class WaymoH5Dataset(Dataset):
         data_fetched.update(
             parse_concatenated_tensor(tl_merged_features, TRAFFIC_LIGHT_FEATURES, batch_first=False)
         )
-        return _generate_features(
+        batch =  _generate_features(
             data_fetched, train_with_tracks_to_predict=self.train_with_tracks_to_predict
         )
+        
+        # Attach the index of the scenario for quick reference
+        batch["scenario_id"] = np.array(idx).astype(np.int64)
+        return batch

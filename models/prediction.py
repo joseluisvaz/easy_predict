@@ -187,6 +187,7 @@ class PredictionModel(nn.Module):
         tl_states_categorical,
         tl_avails,
         tracks_to_predict,
+        agent_to_predict,
     ):
         # map_feats.shape is (batch, polyline, points, features)
         map_feats = roadgraph_features
@@ -215,12 +216,14 @@ class PredictionModel(nn.Module):
         # Perform self attention on all the features before sending it to the cross attention mask
         global_features = self.global_attention(global_features, mask=~global_avails)
 
-        # Only predict the agents of interest only do not predict the agents that
-        # are not required to be predicted
-        current_features = history_features[:, :MAX_NUM_TRACKS_TO_PREDICT, -1].clone()
-        current_availabilities = history_availabilities[:, :MAX_NUM_TRACKS_TO_PREDICT, -1].clone()
-        current_availabilities = torch.logical_and(current_availabilities, tracks_to_predict[: , :MAX_NUM_TRACKS_TO_PREDICT])
-
+        # Get the agent of interest to predict and add a new agent dimension of size 1 for compatibility 
+        # with the decoder        
+        batch_indices = torch.arange(history_features.shape[0], device=history_features.device)
+        current_features = history_features[batch_indices, agent_to_predict, -1][:, None]
+        current_availabilities = history_availabilities[batch_indices, agent_to_predict, -1][:, None]
+        
+        assert torch.all(current_availabilities), "All current availabilities should be True"
+            
         output = self.decoder(
             current_features,
             current_availabilities,

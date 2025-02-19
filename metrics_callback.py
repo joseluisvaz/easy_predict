@@ -12,7 +12,7 @@ from torchinfo import summary
 
 from common_utils.visualization import plot_scene
 from data_utils.feature_description import NUM_HISTORY_FRAMES
-from data_utils.feature_generation import collate_waymo
+from data_utils.feature_generation import collate_waymo_stack
 from data_utils.processed_dataset import ProcessedDataset
 from models.inference import run_model_forward_pass
 
@@ -28,7 +28,7 @@ class OnTrainCallback(L.Callback):
             batch_size=1,
             num_workers=0,
             shuffle=False,
-            collate_fn=collate_waymo,
+            collate_fn=collate_waymo_stack,
         )
 
     # def on_train_start(self, trainer, pl_module):
@@ -50,26 +50,26 @@ class OnTrainCallback(L.Callback):
     #     )
 
     def on_validation_epoch_end(self, trainer, pl_module):
-        for idx, single_sample_batch in enumerate(
-            itertools.islice(self._dataloader, 10, 10 + self._n_samples)
-        ):
-            # Just extract a single sample from the batch and keep the batch dimension
-            single_sample_batch = {k: v.cuda() for k, v in single_sample_batch.items()}
+        # for idx, single_sample_batch in enumerate(
+        #     itertools.islice(self._dataloader, 10, 10 + self._n_samples)
+        # ):
+        #     # Just extract a single sample from the batch and keep the batch dimension
+        #     single_sample_batch = {k: v.cuda() for k, v in single_sample_batch.items()}
 
-            predicted_positions = run_model_forward_pass(pl_module.model, single_sample_batch)
-            self.log_plot_to_clearml(
-                pl_module,
-                pl_module.task.get_logger() if pl_module.task is not None else None,
-                single_sample_batch,
-                predicted_positions,
-                trainer.current_epoch,
-                idx,
-            )
+        #     predicted_positions = run_model_forward_pass(pl_module.model, single_sample_batch)
+        #     self.log_plot_to_clearml(
+        #         pl_module,
+        #         pl_module.task.get_logger() if pl_module.task is not None else None,
+        #         single_sample_batch,
+        #         predicted_positions,
+        #         trainer.current_epoch,
+        #         idx,
+        #     )
 
-        train_metric_values = pl_module.metrics.result()
-        for i, m in enumerate(["min_ade", "min_fde", "miss_rate", "overlap_rate", "map"]):
-            for j, n in enumerate(pl_module.metrics.metric_names):
-                self.log(f"metrics/{m}/{n}", float(train_metric_values[i, j]))
+        # train_metric_values = pl_module.metrics.result()
+        # for i, m in enumerate(["min_ade", "min_fde", "miss_rate", "overlap_rate", "map"]):
+        #     for j, n in enumerate(pl_module.metrics.metric_names):
+        #         self.log(f"metrics/{m}/{n}", float(train_metric_values[i, j]))
         pl_module.metrics.reset_state()
 
     def log_plot_to_clearml(

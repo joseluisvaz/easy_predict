@@ -7,8 +7,8 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 from data_utils.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES
-from data_utils.feature_generation import collate_waymo
-from data_utils.processed_dataset import ProcessedDataset
+from data_utils.feature_generation import collate_waymo_stack
+from data_utils.processed_dataset import ProcessedDataset, AgentCentricDataset
 from metrics import MotionMetrics, _default_metrics_config
 from models.inference import run_model_forward_pass
 from models.prediction import PredictionModel
@@ -21,7 +21,18 @@ def compute_loss(
     agent_mask: torch.Tensor,
     loss_tracks_to_predict_mask: bool,
     loss_use_ego_vehicle_mask: bool,
-):
+) -> float:
+    """
+    B: batch size
+    N: number of agents
+    T: number of time steps
+
+    Args:
+        predicted_positions (torch.Tensor): [B, N, T, 2]
+        target_positions (torch.Tensor): [B, N, T, 2]
+        target_availabilities (torch.Tensor): [B, N, T]
+        agent_mask (torch.Tensor): [B, N]
+    """
 
     total_mask = target_availabilities
     total_mask *= agent_mask.unsqueeze(-1)
@@ -109,20 +120,23 @@ class LightningModule(L.LightningModule):
         predicted_features = run_model_forward_pass(self.model, batch)
         predicted_positions = predicted_features[..., :2]
 
-        MAX_NUM_TRACKS_TO_PREDICT: T.Final[int] = 8
+        batch_indices = torch.arange(
+            predicted_positions.shape[0], device=predicted_positions.device
+        )
+        agent_to_predict = batch["agent_to_predict"]
+
         # Crop the future positions to match the number of timesteps
         future_positions = batch["gt_features"][
-            :, :MAX_NUM_TRACKS_TO_PREDICT, -NUM_FUTURE_FRAMES:, :2
-        ]
+            batch_indices, agent_to_predict, -NUM_FUTURE_FRAMES:, :2
+        ][:, None]
         future_availabilities = batch["gt_features_avails"][
-            :, :MAX_NUM_TRACKS_TO_PREDICT, -NUM_FUTURE_FRAMES:
-        ]
-
+            batch_indices, agent_to_predict, -NUM_FUTURE_FRAMES:
+        ][:, None]
         current_availabilities = batch["gt_features_avails"][
-            :, :MAX_NUM_TRACKS_TO_PREDICT, NUM_HISTORY_FRAMES
-        ]
-        tracks_to_predict = batch["tracks_to_predict"][:, :MAX_NUM_TRACKS_TO_PREDICT]
-        agent_mask = current_availabilities & tracks_to_predict
+            batch_indices, agent_to_predict, NUM_HISTORY_FRAMES
+        ][:, None]
+
+        assert torch.all(current_availabilities)
 
         # batch["tracks_to_predict"][:, :MAX_NUM_TRACKS_TO_PREDICT],
         # batch["is_sdc"][:, :MAX_NUM_TRACKS_TO_PREDICT],
@@ -130,7 +144,7 @@ class LightningModule(L.LightningModule):
             predicted_positions,
             future_positions,
             future_availabilities,
-            agent_mask,
+            current_availabilities,
             self.hyperparameters.loss_tracks_to_predict_mask,
             self.hyperparameters.loss_use_ego_vehicle_mask,
         )
@@ -178,10 +192,10 @@ class LightningModule(L.LightningModule):
         }
 
     def train_dataloader(self):
-        dataset = ProcessedDataset(
+        dataset = AgentCentricDataset(
             self.hyperparameters.train_dataset,
             data_perturb_cfg=self.hyperparameters.data_perturb,
-            train_with_tracks_to_predict=self.hyperparameters.train_with_tracks_to_predict,
+            # train_with_tracks_to_predict=self.hyperparameters.train_with_tracks_to_predict,
         )
         return DataLoader(
             dataset,
@@ -192,13 +206,13 @@ class LightningModule(L.LightningModule):
             pin_memory=False,
             drop_last=True,
             prefetch_factor=4 if not self.fast_dev_run else None,
-            collate_fn=collate_waymo,
+            collate_fn=collate_waymo_stack,
         )
 
     def val_dataloader(self):
-        dataset = ProcessedDataset(
+        dataset = AgentCentricDataset(
             self.hyperparameters.val_dataset,
-            train_with_tracks_to_predict=self.hyperparameters.train_with_tracks_to_predict,
+            # train_with_tracks_to_predict=self.hyperparameters.train_with_tracks_to_predict,
         )
         return DataLoader(
             dataset,
@@ -209,5 +223,5 @@ class LightningModule(L.LightningModule):
             pin_memory=False,
             drop_last=True,
             prefetch_factor=4 if not self.fast_dev_run else None,
-            collate_fn=collate_waymo,
+            collate_fn=collate_waymo_stack,
         )

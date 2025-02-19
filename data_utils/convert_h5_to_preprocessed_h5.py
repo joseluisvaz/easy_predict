@@ -6,7 +6,8 @@ import numpy as np
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data_utils.feature_generation import WaymoH5Dataset, collate_waymo
+from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
+from data_utils.feature_generation import WaymoH5Dataset, collate_waymo_stack
 
 BATCH_SIZE = 256
 NUM_WORKERS = 16
@@ -57,18 +58,43 @@ def main(data_dir: str, out: str):
         pin_memory=False,
         drop_last=False,
         prefetch_factor=4,
-        collate_fn=collate_waymo,
+        collate_fn=collate_waymo_stack,
     )
 
-    with h5py.File(out, "w") as f:
+    with h5py.File(out, "w") as file:
 
         dataset_created_flag = False
         for batch in tqdm(dataloader):
             if not dataset_created_flag:
-                _create_h5_datasets(f, batch)
+                _create_h5_datasets(file, batch)
                 dataset_created_flag = True
             else:
-                _append_to_h5_datasets(f, batch)
+                _append_to_h5_datasets(file, batch)
+
+        # Add a relational table in the dataset that includes the scenario_id to agent_id mapping
+        num_scenarios = len(file["gt_states"])
+
+        coupled_indices = []
+        for dataset_idx in tqdm(range(num_scenarios), total=num_scenarios):
+
+            scenario_id = file["scenario_id"][dataset_idx]
+            assert scenario_id >= 0
+            tracks_to_predict_mask = np.array(file["tracks_to_predict"][dataset_idx]).astype(
+                np.bool_
+            )
+
+            for agent_id in range(MAX_AGENTS_TO_PREDICT):
+                if not tracks_to_predict_mask[agent_id]:
+                    continue
+                coupled_index = np.array([scenario_id, agent_id]).astype(np.int64)
+                coupled_indices.append(coupled_index)
+
+        file.create_dataset(
+            "coupled_indices",
+            data=np.stack(coupled_indices, axis=0),
+            compression="gzip",
+            chunks=True,
+        )
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from prediction_module import LightningModule
 torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")
 
-LR_FIND = False
+LR_FIND = False 
 
 
 task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
@@ -81,7 +81,7 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
 
     if LR_FIND and not fast_dev_run:
         tuner = Tuner(trainer)
-        lr_finder = tuner.lr_find(module, min_lr=1e-6, max_lr=5e-2)
+        lr_finder = tuner.lr_find(module, min_lr=2e-4, max_lr=2e-4)
 
         fig = lr_finder.plot(suggest=True)
         fig.savefig("learning_rate.png")

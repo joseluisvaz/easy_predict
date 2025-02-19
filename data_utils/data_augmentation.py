@@ -1,9 +1,14 @@
 import typing as T
 from abc import ABC, abstractmethod
+import copy
 
 import numpy as np
 
-from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
+from common_utils.geometry import (
+    get_so2_from_se2,
+    get_transformation_matrix,
+    transform_points,
+)
 
 # from utils.geometry import get_transformation_matrix
 from data_utils.feature_description import NUM_HISTORY_FRAMES
@@ -12,13 +17,13 @@ from data_utils.feature_description import NUM_HISTORY_FRAMES
 def perturb_pose(perturbation_se2, batch: T.Dict[str, np.ndarray]):
     """Perturb the pose of the agents in the batch"""
     perturbation_so2 = get_so2_from_se2(perturbation_se2)
-
+    
     # Modify geometrical properties for agent features
-    avails = batch["gt_states_avails"]
-    positions = batch["gt_states"][avails, :2]
-    directions = batch["gt_states"][avails, 2:4]
-    batch["gt_states"][avails, :2] = transform_points(positions, perturbation_se2)
-    batch["gt_states"][avails, 2:4] = transform_points(directions, perturbation_so2)
+    avails = batch["gt_features_avails"]
+    positions = batch["gt_features"][avails, :2]
+    directions = batch["gt_features"][avails, 2:4]
+    batch["gt_features"][avails, :2] = transform_points(positions, perturbation_se2)
+    batch["gt_features"][avails, 2:4] = transform_points(directions, perturbation_so2)
 
     # Modify geometrical properties for map features
     map_avails = batch["roadgraph_features_mask"]
@@ -26,7 +31,27 @@ def perturb_pose(perturbation_se2, batch: T.Dict[str, np.ndarray]):
     map_dirs = batch["roadgraph_features"][map_avails, 2:4]
     batch["roadgraph_features"][map_avails, :2] = transform_points(map_points, perturbation_se2)
     batch["roadgraph_features"][map_avails, 2:4] = transform_points(map_dirs, perturbation_so2)
+
+    # Modify geometrical properties for tl features
+    tl_avails = batch["tl_avails"]
+    tl_points = batch["tl_states"][tl_avails, :2]
+    batch["tl_states"][tl_avails, :2] = transform_points(tl_points, perturbation_se2)
     return batch
+
+
+def move_frame_to_agent_of_idx(
+    agent_idx: int, batch: T.Dict[str, np.ndarray]
+) -> T.Dict[str, np.ndarray]:
+    """Move the frame to the agent of index agent_idx.
+
+    NOTE: batch will be mutated in place
+    """
+    centroid = batch["gt_features"][agent_idx, NUM_HISTORY_FRAMES, :2]
+    current_dir = batch["gt_features"][agent_idx, NUM_HISTORY_FRAMES, 2:4]
+    yaw = np.arctan2(current_dir[..., 1], current_dir[..., 0])
+
+    transformation_matrix = get_transformation_matrix(centroid, yaw)
+    return perturb_pose(transformation_matrix, copy.deepcopy(batch))
 
 
 class DataAugmentation(ABC):
@@ -70,19 +95,14 @@ class AnchorFrameAugmentation(DataAugmentation):
             return
 
         # Get valid agents, and check if its a valid track to predict
-        current_availabilities = data["gt_states_avails"][:, NUM_HISTORY_FRAMES]
+        current_availabilities = data["gt_features_avails"][:, NUM_HISTORY_FRAMES]
         tracks_to_predict = data["tracks_to_predict"]
 
         available_and_predictable = np.logical_and(current_availabilities, tracks_to_predict)
         agent_indices = np.arange(len(available_and_predictable))
         selected_agent_id = np.random.choice(agent_indices[available_and_predictable])
 
-        centroid = data["gt_states"][selected_agent_id, NUM_HISTORY_FRAMES, :2]
-        current_dir = data["gt_states"][selected_agent_id, NUM_HISTORY_FRAMES, 2:4]
-        yaw = np.arctan2(current_dir[..., 1], current_dir[..., 0])
-
-        transformation_matrix = get_transformation_matrix(centroid, yaw)
-        perturb_pose(transformation_matrix, data)
+        data = move_frame_to_agent_of_idx(selected_agent_id, data)
 
 
 class BaseFrameAugmentation(DataAugmentation):
@@ -104,6 +124,3 @@ class BaseFrameAugmentation(DataAugmentation):
 
         perturbation_se2 = self._get_perturbation_matrix()
         perturb_pose(perturbation_se2, data)
-
-
-

@@ -19,7 +19,7 @@ def run_model_forward_pass(
         torch.Tensor: _description_
     """
     history_states = batch["gt_features"][:, :, : NUM_HISTORY_FRAMES + 1, :]
-    history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
+    history_avails = batch["gt_features_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
 
     predicted_positions = model(
         history_states,
@@ -32,6 +32,7 @@ def run_model_forward_pass(
         batch["tl_states_categorical"],
         batch["tl_avails"],
         batch["tracks_to_predict"], 
+        batch["agent_to_predict"],
     )
 
     return predicted_positions
