@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from typing import Dict
+import typing as T
 
 import tensorflow as tf
 
@@ -8,6 +9,10 @@ NUM_HISTORY_FRAMES = 10 // SUBSAMPLE_SEQUENCE
 NUM_FUTURE_FRAMES = 80 // SUBSAMPLE_SEQUENCE
 NUM_MAP_SAMPLES = 30000
 MAX_AGENTS_TO_PREDICT = 8
+
+# Configuration for the features
+MAP_MIN_NUM_OF_POINTS: T.Final = 100
+MAP_BOUNDS_PADDING_M: T.Final = 10.0
 
 GT_STATES_MEANS = [16.9850, 2.4561, 4.4966, 2.0180, 1.6618, 0.5991, -0.0354]
 GT_STATES_STDS = [41.7659, 29.3103, 1.2764, 0.3939, 3.4035, 5.1634, 2.5289]

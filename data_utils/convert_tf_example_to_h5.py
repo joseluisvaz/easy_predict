@@ -2,12 +2,10 @@ import multiprocessing as mp
 import pathlib
 import typing as T
 from argparse import ArgumentParser, Namespace
-from concurrent.futures import ThreadPoolExecutor
 
 import h5py
 import numpy as np
 import tensorflow as tf
-import zarr
 from feature_description import (
     ROADGRAPH_FEATURES,
     STATE_FEATURES,

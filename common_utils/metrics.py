@@ -1,12 +1,17 @@
 from google.protobuf import text_format
+import typing as T
 
+from common_utils.agent_centric_to_scenario import (
+    batch_scenarios_by_feature,
+    group_batch_by_scenario,
+)
 from waymo_open_dataset.metrics.ops import py_metrics_ops
 from waymo_open_dataset.metrics.python import config_util_py as config_util
 from waymo_open_dataset.protos import motion_metrics_pb2
 
 import tensorflow as tf
-from torch import Tensor as TorchTensor
-from data_utils.feature_description import NUM_FUTURE_FRAMES, NUM_HISTORY_FRAMES, SUBSAMPLE_SEQUENCE 
+import torch
+from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
 
 
 def _default_metrics_config():
@@ -65,17 +70,17 @@ class MotionMetrics(tf.keras.metrics.Metric):
         self._prediction_ground_truth_indices_mask = []
         self._object_type = []
 
-    def update_state(
+    def _update_state(
         self,
-        prediction_trajectory: TorchTensor,
-        prediction_score: TorchTensor,
-        ground_truth_trajectory: TorchTensor,
-        ground_truth_is_valid: TorchTensor,
-        prediction_ground_truth_indices: TorchTensor,
-        prediction_ground_truth_indices_mask: TorchTensor,
-        object_type: TorchTensor,
-    ):
-        def to_tf(torch_tensor):
+        prediction_trajectory: torch.Tensor,
+        prediction_score: torch.Tensor,
+        ground_truth_trajectory: torch.Tensor,
+        ground_truth_is_valid: torch.Tensor,
+        prediction_ground_truth_indices: torch.Tensor,
+        prediction_ground_truth_indices_mask: torch.Tensor,
+        object_type: torch.Tensor,
+    ) -> None:
+        def to_tf(torch_tensor: torch.Tensor) -> tf.Tensor:
             return tf.convert_to_tensor(torch_tensor.detach().cpu().numpy())
 
         self._prediction_trajectory.append(to_tf(prediction_trajectory))
@@ -87,6 +92,43 @@ class MotionMetrics(tf.keras.metrics.Metric):
             to_tf(prediction_ground_truth_indices_mask)
         )
         self._object_type.append(to_tf(object_type))
+
+    def update_state(
+        self, batch: T.Dict[str, torch.Tensor], full_predicted_positions: torch.Tensor
+    ):
+        batched_scenarios = group_batch_by_scenario(batch, full_predicted_positions)
+
+        # Chop all the tensors to match the number of predicted agents the tracks to predict mask
+        # will take care of just computing the metrics for the relevant agents
+        predicted_positions = batched_scenarios["predicted_positions"][:, :MAX_AGENTS_TO_PREDICT]
+        gt_states_avails = batched_scenarios["gt_states_avails"][:, :MAX_AGENTS_TO_PREDICT]
+        gt_states = batched_scenarios["gt_states"][:, :MAX_AGENTS_TO_PREDICT]
+        actor_type = batched_scenarios["actor_type"][:, :MAX_AGENTS_TO_PREDICT]
+        tracks_to_predict_mask = batched_scenarios["tracks_to_predict"][:, :MAX_AGENTS_TO_PREDICT]
+
+        batch_size, num_agents, _, _ = predicted_positions.shape
+        # [batch_size, num_agents, steps, 2] -> # [batch_size, 1, 1, num_agents, steps, 2].
+        # The added dimensions are top_k = 1, num_agents_per_joint_prediction = 1.
+        predicted_positions = predicted_positions[:, None, None]
+        # Fake the score since this model does not generate any score per predicted
+        # trajectory. Get the first shapes [batch_size, num_preds, top_k] -> [batch_size, 1, 1].
+        pred_score = torch.ones((batch_size, 1, 1))
+        # [batch_size, num_pred, num_agents].
+        pred_gt_indices = torch.arange(num_agents, dtype=torch.int64)
+        pred_gt_indices = pred_gt_indices[None, None, :].expand(batch_size, 1, num_agents)
+        # For the tracks to predict use the current timestamps
+        pred_gt_indices_mask = tracks_to_predict_mask
+        pred_gt_indices_mask = pred_gt_indices_mask.unsqueeze(1)
+
+        self._update_state(
+            prediction_trajectory=predicted_positions,
+            prediction_score=pred_score,
+            ground_truth_trajectory=gt_states,
+            ground_truth_is_valid=gt_states_avails,
+            prediction_ground_truth_indices=pred_gt_indices,
+            prediction_ground_truth_indices_mask=pred_gt_indices_mask,
+            object_type=actor_type,
+        )
 
     def result(self):
         # [batch_size, num_preds, top_k, num_agents, steps, 2].

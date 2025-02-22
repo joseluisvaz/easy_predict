@@ -14,7 +14,13 @@ MAX_NUM_TRACKS_TO_PREDICT: T.Final = 8
 
 
 def concatenate_historical_features(history_states: torch.Tensor, actor_types: torch.Tensor):
-    """Concatenate history states with one-hot encoded actor types"""
+    """Concatenate history states with one-hot encoded actor types.
+    Args:
+        history_states: (n_batch, n_agents, n_past, _)
+        actor_types: (n_batch, n_agents, n_past)
+    Returns:
+        (n_batch, n_agents, n_past, n_features + n_classes)
+    """
     n_batch, n_agents, n_past, _ = history_states.shape
     # clamp to 0, to remove instances of -1
     types = actor_types.clamp_(min=0).view(n_batch, n_agents, 1).expand(-1, -1, n_past)
@@ -31,7 +37,13 @@ def concatenate_historical_features(history_states: torch.Tensor, actor_types: t
 
 
 def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
-    """Concatenate map_feats with one-hot encoded map types"""
+    """Concatenate map_feats with one-hot encoded map types.
+    Args:
+        map_feats: (n_batch, n_polylines, n_points, _)
+        map_types: (n_batch, n_polylines, n_points)
+    Returns:
+        (n_batch, n_polylines, n_points, n_features + n_classes)
+    """
     n_batch, n_polylines, n_points, _ = map_feats.shape
     types = map_types.view(n_batch, n_polylines, 1).expand(-1, -1, n_points)
 
@@ -46,11 +58,13 @@ def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
     )
 
 def concatenate_tl_features(tl_feats: torch.Tensor, tl_types: torch.Tensor):
-    """Concatenate map_feats with one-hot encoded map types"""
-    # n_batch, n_tls, n_timesteps, _ = tl_feats.shape
-    # # types = tl_types.view(n_batch, n_tls, n_timesteps)
-    
-    # print(tl_types)
+    """Concatenate map_feats with one-hot encoded map types.
+    Args:
+        tl_feats: (n_batch, n_tls, n_timesteps, _)
+        tl_types: (n_batch, n_tls, n_timesteps)
+    Returns:
+        (n_batch, n_tls, n_timesteps, n_features + n_classes)
+    """
     
     NUM_CLASSES: T.Final = 9
     types_one_hot = F.one_hot(tl_types, num_classes=NUM_CLASSES).float()
@@ -70,6 +84,15 @@ class Encoder(nn.Module):
         self.hidden_size = hidden_size
 
     def forward(self, sequence, mask):
+        """Encode the sequence using an LSTM cell.
+        Args:
+            sequence: (n_batch, n_agents, n_timesteps, _)
+            mask: (n_batch, n_agents, n_timesteps)
+        Returns:
+            hidden: (n_batch, n_agents, n_timesteps, _)
+            context: (n_batch, n_agents, n_timesteps, _)
+        """
+        
         n_batch, n_agents, n_timesteps, _ = sequence.shape
         hidden, context = self.lstm_cell.get_initial_hidden_state(
             (n_batch, n_agents, self.hidden_size), sequence.device, requires_grad=True
@@ -106,8 +129,13 @@ class Decoder(nn.Module):
         )
 
     def step_physical_state(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """Update the feature vector using the dynamics function, this copies all the features to the policy and
-        replaces the state with the new computed states
+        """Update the feature vector using the dynamics function, this copies 
+        all the features to the policy and replaces the state with the new computed states
+        Args:
+            state: (n_batch, n_agents, n_features)
+            action: (n_batch, n_agents, n_actions)
+        Returns:
+            next_state: (n_batch, n_agents, n_features)
         """
         next_state = state.clone()
         physical_state = self.dynamics.get_state_from_features(state)
@@ -116,7 +144,17 @@ class Decoder(nn.Module):
         return next_state
 
     def forward(self, current_features, current_availabilities, context_embeddings, context_avails):
-
+        """Forward pass of the decoder. when we are using agent centric representation we are only 
+        decoding a single agent, therefore n_agents is 1.
+        
+        Args:
+            current_features: (n_batch, n_agents, n_features)
+            current_availabilities: (n_batch, n_agents)
+            context_embeddings: (n_batch, n_entities, _)
+            context_avails: (n_batch, n_entities)
+        Returns:
+            outputs: (n_batch, n_agents, n_timesteps, n_features)
+        """
         current_state = current_features.clone()
 
         n_batch, n_agents, _ = current_state.shape
@@ -148,7 +186,7 @@ class PredictionModel(nn.Module):
     MAP_INPUT_SIZE = 20  # x, y, direction and one hot encoded type
 
     def __init__(
-        self, input_features, hidden_size, n_timesteps, model_config, normalize: bool = False
+        self, input_features, hidden_size, n_timesteps, model_config,
     ):
         super(PredictionModel, self).__init__()
         self.hidden_size = hidden_size
@@ -173,7 +211,6 @@ class PredictionModel(nn.Module):
             embed_dim=hidden_size, num_heads=8, dropout_p=0.0
         )
 
-        self.normalize = normalize
 
     def forward(
         self,

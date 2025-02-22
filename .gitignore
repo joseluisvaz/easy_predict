@@ -1,14 +1,10 @@
-# Ignore data folder
-data/
 
-# Ignore trajdata folder
-trajdata/
 
 # Ignore __pycache__ directories
 __pycache__/
 
+data/
 lightning_logs/
-
 checkpoints/*
-
 .lr_find*
+.vscode/

@@ -4,7 +4,7 @@ import lightning as L
 from omegaconf import OmegaConf
 
 from metrics_callback import OnTrainCallback
-from prediction_module import LightningModule
+from prediction_module import PredictionLightningModule
 
 
 def main(use_gpu: bool, ckpt_path: str):
@@ -12,9 +12,9 @@ def main(use_gpu: bool, ckpt_path: str):
     hyperparameters = OmegaConf.load("configs/hyperparameters.yaml")
 
     module = (
-        LightningModule(False, hyperparameters, clearml_task=None, cosine_t_max=100)
+        PredictionLightningModule(False, hyperparameters, clearml_task=None, cosine_t_max=100)
         if not ckpt_path
-        else LightningModule.load_from_checkpoint(
+        else PredictionLightningModule.load_from_checkpoint(
             ckpt_path,
             fast_dev_run=False,
             hyperparameters=hyperparameters,

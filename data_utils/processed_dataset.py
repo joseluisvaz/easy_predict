@@ -1,14 +1,11 @@
 import typing as T
-
+import copy
 import h5py
 import numpy as np
 from torch.utils.data import Dataset
 
 from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.data_augmentation import (
-    AnchorFrameAugmentation,
-    BaseFrameAugmentation,
-    ComposedAugmentation,
     move_frame_to_agent_of_idx,
 )
 from data_utils.feature_description import NUM_HISTORY_FRAMES
@@ -105,6 +102,7 @@ def _generate_agent_centric_samples(sample: T.Dict[str, np.ndarray]) -> T.Dict[s
 
 def _get_scenario_from_h5_file(file: h5py.File, idx: int) -> T.Dict[str, np.ndarray]:
     sample = {
+        "scenario_id": np.array(file["scenario_id"][idx]).astype(np.int64),
         "gt_states": np.array(file["gt_states"][idx]).astype(np.float32),  # [N_AGENTS, TIME, FEATS]
         "gt_states_avails": np.array(file["gt_states_avails"][idx]).astype(
             np.bool_
@@ -135,11 +133,8 @@ def _get_scenario_from_h5_file(file: h5py.File, idx: int) -> T.Dict[str, np.ndar
         "tl_avails": np.array(file["tl_avails"][idx]).astype(np.bool_),  # [N_TRAFFIC_LIGHTS, TIME,]
     }
 
-    # TODO: Move to feature generation
-    # Generate the agent sequence features, these are different than gt_states and we can change
-    # them to do some feature engineering
-    sample["gt_features"], sample["gt_features_avails"] = _generate_agent_features(
-        sample["gt_states"], sample["gt_states_avails"]
+    sample["current_state_world_frame"] = sample["gt_states"][:, NUM_HISTORY_FRAMES].astype(
+        np.float32
     )
     return sample
 
@@ -210,13 +205,20 @@ class ScenarioDataset(Dataset):
             self.file = h5py.File(self.filepath, "r", libver="latest", swmr=True)
 
         coupled_indices = self.file["coupled_indices"]
-        agent_indices = coupled_indices[coupled_indices[:, 0] == idx][:, 1]
+        agent_indices = coupled_indices[coupled_indices[:, 0] == scenario_idx][:, 1]
 
         sample = _get_scenario_from_h5_file(self.file, scenario_idx)
 
         batches = []
         for agent_idx in agent_indices:
             agent_sample = move_frame_to_agent_of_idx(agent_idx, sample)
+
+            # TODO: Move to feature generation
+            # Generate the agent sequence features, these are different than gt_states and we can change
+            # them to do some feature engineering
+            agent_sample["gt_features"], agent_sample["gt_features_avails"] = _generate_agent_features(
+                agent_sample["gt_states"], agent_sample["gt_states_avails"]
+            )
             agent_sample["agent_to_predict"] = np.array(agent_idx).astype(np.int64)
             batches.append(agent_sample)
 
@@ -255,6 +257,14 @@ class AgentCentricDataset(Dataset):
         ), "All agents should a valid current timestamp"
 
         sample = move_frame_to_agent_of_idx(agent_idx, sample)
+
+        # TODO: Move to feature generation
+        # Generate the agent sequence features, these are different than gt_states and we can change
+        # them to do some feature engineering
+        sample["gt_features"], sample["gt_features_avails"] = _generate_agent_features(
+            sample["gt_states"], sample["gt_states_avails"]
+        )
+
         sample["agent_to_predict"] = np.array(agent_idx).astype(np.int64)
         return sample
 

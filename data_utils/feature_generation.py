@@ -21,6 +21,8 @@ from data_utils.feature_description import (
     STATE_FEATURES,
     SUBSAMPLE_SEQUENCE,
     TRAFFIC_LIGHT_FEATURES,
+    MAP_MIN_NUM_OF_POINTS,
+    MAP_BOUNDS_PADDING_M,
 )
 
 ROADGRAPH_TYPES_OF_INTEREST: Final = {
@@ -215,25 +217,21 @@ def get_inside_bounds_mask(xy_positions: np.ndarray, bounds: np.ndarray) -> np.n
     return x_min_in & y_min_in & x_max_in & y_max_in
 
 
-_MIN_NUM_OF_POINTS_IN_ROADGRAPH: Final = 100
-_BOUNDS_PADDING_M: Final = 10.0
-
-
 def _filter_inside_relevant_area(
     map_positions: np.ndarray, agent_positions: np.ndarray
 ) -> Dict[str, np.ndarray]:
     """Filter data inside relevant area, returns a mask"""
     # If the map is already small then just return a valid mask
-    if len(map_positions) <= _MIN_NUM_OF_POINTS_IN_ROADGRAPH:
+    if len(map_positions) <= MAP_MIN_NUM_OF_POINTS:
         return np.ones_like(map_positions[..., 0]).astype(np.bool_)
     # Increase padding until we find minimum number of points
-    current_padding_m = _BOUNDS_PADDING_M
+    current_padding_m = MAP_BOUNDS_PADDING_M
     while True:
         bounds = get_bounds_from_points(agent_positions, current_padding_m)
         inside_bounds_mask = get_inside_bounds_mask(map_positions, bounds)
         n_inside_mask = np.sum(inside_bounds_mask)
 
-        if n_inside_mask > _MIN_NUM_OF_POINTS_IN_ROADGRAPH:
+        if n_inside_mask > MAP_MIN_NUM_OF_POINTS:
             break
         current_padding_m += 10.0
     return inside_bounds_mask
@@ -422,11 +420,6 @@ def _generate_features(
 ) -> Dict[str, np.ndarray]:
     agent_features = WaymoDatasetHelper.generate_multi_agent_features(decoded_example)
 
-    # Mask everything to only keep tracks to predict and ego
-    if train_with_tracks_to_predict:
-        tracks_and_ego_mask = np.logical_or(agent_features.tracks_to_predict, agent_features.is_sdc)
-        agent_features.filter_with_mask(tracks_and_ego_mask)
-
     # # Now remove the unwanted agents by filtering with tracks to predict
     agent_features_current_state = agent_features.gt_states[:, NUM_HISTORY_FRAMES]
 
@@ -449,12 +442,12 @@ def _generate_features(
     current_avails = agent_features.gt_states_avails[:, NUM_HISTORY_FRAMES].astype(np.bool_)
     tracks_to_predict = agent_features.tracks_to_predict.astype(np.bool_)
     assert np.all(current_avails[tracks_to_predict])
-
+    
 
     return {
         "gt_states": agent_features.gt_states.astype(
             np.float32
-        ),  # [N_AGENTS, TIME, FEATS=7] (x, y, cos(yaw), sin(yaw), speed, length, width)
+        ),  # [N_AGENTS, TIME, FEATS=7] (x, y, length, width, yaw, velocity_x, velocity_y)
         "gt_states_avails": agent_features.gt_states_avails.astype(np.bool_),  # [N_AGENTS, TIME]
         "actor_type": agent_features.actor_type.astype(np.int64),  # [N_AGENTS,]
         "is_sdc": agent_features.is_sdc.astype(np.bool_),  # [N_AGENTS,]
@@ -488,6 +481,19 @@ def collate_waymo_concatenate(payloads: List[Any]) -> Dict[str, Tensor]:
 def collate_waymo_stack(payloads: List[Any]) -> Dict[str, Tensor]:
     return default_convert(default_collate(payloads))
 
+def collate_waymo_scenario(payloads: T.List[T.List[T.Dict[str, np.ndarray]]]) -> Dict[str, Tensor]:
+    
+    # First collation will do stacking of the tensors
+    collated_subbatches = []
+    for subbatch in payloads:
+        collated_subbatches.append(default_collate(subbatch))
+    
+    # Second collation will do concatenation of the tensors
+    collated_batch = {}
+    for key in collated_subbatches[0]:
+        collated_batch[key] = torch.concatenate([subbatch[key] for subbatch in collated_subbatches])
+    
+    return default_convert(collated_batch)
 
 def parse_concatenated_tensor(
     concatenated_tensor: np.ndarray, feature_dict: OrderedDict, batch_first: bool = True

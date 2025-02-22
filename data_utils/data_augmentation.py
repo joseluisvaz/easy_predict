@@ -6,6 +6,7 @@ import numpy as np
 
 from common_utils.geometry import (
     get_so2_from_se2,
+    get_yaw_from_se2,
     get_transformation_matrix,
     transform_points,
 )
@@ -17,13 +18,15 @@ from data_utils.feature_description import NUM_HISTORY_FRAMES
 def perturb_pose(perturbation_se2, batch: T.Dict[str, np.ndarray]):
     """Perturb the pose of the agents in the batch"""
     perturbation_so2 = get_so2_from_se2(perturbation_se2)
-    
+    relative_yaw = get_yaw_from_se2(perturbation_se2)  # type: ignore
+
     # Modify geometrical properties for agent features
-    avails = batch["gt_features_avails"]
-    positions = batch["gt_features"][avails, :2]
-    directions = batch["gt_features"][avails, 2:4]
-    batch["gt_features"][avails, :2] = transform_points(positions, perturbation_se2)
-    batch["gt_features"][avails, 2:4] = transform_points(directions, perturbation_so2)
+    avails = batch["gt_states_avails"]
+    positions = batch["gt_states"][avails, :2]
+    directions = batch["gt_states"][avails, 5:7]
+    batch["gt_states"][avails, :2] = transform_points(positions, perturbation_se2)
+    batch["gt_states"][avails, 5:7] = transform_points(directions, perturbation_so2)
+    batch["gt_states"][avails, 4] += relative_yaw
 
     # Modify geometrical properties for map features
     map_avails = batch["roadgraph_features_mask"]
@@ -46,9 +49,8 @@ def move_frame_to_agent_of_idx(
 
     NOTE: batch will be mutated in place
     """
-    centroid = batch["gt_features"][agent_idx, NUM_HISTORY_FRAMES, :2]
-    current_dir = batch["gt_features"][agent_idx, NUM_HISTORY_FRAMES, 2:4]
-    yaw = np.arctan2(current_dir[..., 1], current_dir[..., 0])
+    centroid = batch["gt_states"][agent_idx, NUM_HISTORY_FRAMES, :2]
+    yaw = batch["gt_states"][agent_idx, NUM_HISTORY_FRAMES, 4]
 
     transformation_matrix = get_transformation_matrix(centroid, yaw)
     return perturb_pose(transformation_matrix, copy.deepcopy(batch))

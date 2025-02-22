@@ -19,51 +19,42 @@ from omegaconf import OmegaConf
 from pytorch_lightning.profilers import SimpleProfiler
 
 from metrics_callback import OnTrainCallback
-from prediction_module import LightningModule
+from prediction_module import PredictionLightningModule
 
 torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")
 
-LR_FIND = False 
 
-
-task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
-
-
-def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
+def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str], task: T.Optional[Task]):
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
     hyperparameters = OmegaConf.load("configs/hyperparameters.yaml")
-    task.connect(hyperparameters)
 
-    # Load if a checkpoint is provided
+    if task is not None:
+        task.connect(hyperparameters)
+
     module = (
-        LightningModule(fast_dev_run, hyperparameters, cosine_t_max=100, clearml_task=task)
+        PredictionLightningModule(fast_dev_run, hyperparameters, clearml_task=task)
         if not ckpt_path
-        else LightningModule.load_from_checkpoint(
+        else PredictionLightningModule.load_from_checkpoint(
             ckpt_path,
-            # fast_dev_run=fast_dev_run,
-            # cosine_t_max=100,
-            # hyperparameters=hyperparameters,
             clearml_task=task,
             map_location="cpu",
         )
     )
 
-    module.cosine_t_max = hyperparameters.max_epochs * len(module.train_dataloader())
-
-    checkpoint_callback = ModelCheckpoint(
-        dirpath="checkpoints/",
-        filename="model-{epoch:02d}-{loss/val:.2f}",
-        monitor="loss/val",
-        mode="min",
-        save_top_k=1,
-        verbose=True,
-    )
-    metrics_callback = OnTrainCallback(
-        hyperparameters.val_dataset,
-    )
+    callbacks = [
+        OnTrainCallback(hyperparameters.val_dataset),
+        ModelCheckpoint(
+            dirpath="checkpoints/",
+            filename="model-{epoch:02d}-{loss/val:.2f}",
+            monitor="loss/val",
+            mode="min",
+            save_top_k=1,
+            verbose=True,
+        ),
+    ]
 
     trainer = L.Trainer(
         max_epochs=hyperparameters.max_epochs,
@@ -71,15 +62,15 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
         devices=1,
         fast_dev_run=fast_dev_run,
         precision="16-mixed",
-        callbacks=[metrics_callback, checkpoint_callback],
+        callbacks=callbacks,
         accumulate_grad_batches=hyperparameters.accumulate_grad_batches,
-        profiler=SimpleProfiler(),
+        profiler=SimpleProfiler() if args.profile else None,
         gradient_clip_val=hyperparameters.grad_norm_clip,
         # limit_train_batches=0.1,
         # limit_val_batches=0.1,
     )
 
-    if LR_FIND and not fast_dev_run:
+    if args.lr_find and not fast_dev_run:
         tuner = Tuner(trainer)
         lr_finder = tuner.lr_find(module, min_lr=2e-4, max_lr=2e-4)
 
@@ -95,6 +86,8 @@ def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str]):
 def _parse_arguments() -> Namespace:
     parser = ArgumentParser(allow_abbrev=True)
     parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
+    parser.add_argument("--profile", action="store_true", help="Profile the training")
+    parser.add_argument("--lr_find", action="store_true", help="LR find")
     parser.add_argument("--gpu", action="store_true", help="Use GPU")
     parser.add_argument("--ckpt", required=False, type=str, help="Checkpoint file")
     return parser.parse_args()
@@ -102,4 +95,9 @@ def _parse_arguments() -> Namespace:
 
 if __name__ == "__main__":
     args = _parse_arguments()
-    main(args.fast_dev_run, args.gpu, args.ckpt)
+    
+    if not args.fast_dev_run:
+        task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
+    else:
+        task = None
+    main(args.fast_dev_run, args.gpu, args.ckpt, task)
