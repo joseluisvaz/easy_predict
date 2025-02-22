@@ -259,7 +259,7 @@ class PredictionModel(nn.Module):
         current_features = history_features[batch_indices, agent_to_predict, -1][:, None]
         current_availabilities = history_availabilities[batch_indices, agent_to_predict, -1][:, None]
         
-        assert torch.all(current_availabilities), "All current availabilities should be True"
+        assert torch.all(current_availabilities), f"All current availabilities should be True "
             
         output = self.decoder(
             current_features,

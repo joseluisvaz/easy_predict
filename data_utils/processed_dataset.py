@@ -1,13 +1,14 @@
-import typing as T
 import copy
+import pathlib
+import typing as T
+
 import h5py
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 
 from common_utils.tensor_utils import force_pad_batch_size
-from data_utils.data_augmentation import (
-    move_frame_to_agent_of_idx,
-)
+from data_utils.data_augmentation import move_frame_to_agent_of_idx
 from data_utils.feature_description import NUM_HISTORY_FRAMES
 
 
@@ -100,8 +101,8 @@ def _generate_agent_centric_samples(sample: T.Dict[str, np.ndarray]) -> T.Dict[s
     return agent_batch
 
 
-def _get_scenario_from_h5_file(file: h5py.File, idx: int) -> T.Dict[str, np.ndarray]:
-    sample = {
+def _get_scenario_from_h5_file_using_idx(file: T.Mapping[str, np.ndarray], idx: int) -> T.Dict[str, np.ndarray]:
+    return {
         "scenario_id": np.array(file["scenario_id"][idx]).astype(np.int64),
         "gt_states": np.array(file["gt_states"][idx]).astype(np.float32),  # [N_AGENTS, TIME, FEATS]
         "gt_states_avails": np.array(file["gt_states_avails"][idx]).astype(
@@ -109,9 +110,7 @@ def _get_scenario_from_h5_file(file: h5py.File, idx: int) -> T.Dict[str, np.ndar
         ),  # [N_AGENTS, TIME,]
         "actor_type": np.array(file["actor_type"][idx]).astype(np.int64),  # [N_AGENTS,]
         "is_sdc": np.array(file["is_sdc"][idx]).astype(np.bool_),  # [N_AGENTS,]
-        "tracks_to_predict": np.array(file["tracks_to_predict"][idx]).astype(
-            np.bool_
-        ),  # [N_AGENTS,]
+        "tracks_to_predict": np.array(file["tracks_to_predict"][idx]).astype(np.bool_),  # [N_AGENTS,]
         "roadgraph_features": np.array(file["roadgraph_features"][idx]).astype(
             np.float32
         ),  # [N_POLYLINE, N_POINTS, FEATS]
@@ -124,37 +123,59 @@ def _get_scenario_from_h5_file(file: h5py.File, idx: int) -> T.Dict[str, np.ndar
         "roadgraph_features_ids": np.array(file["roadgraph_features_ids"][idx]).astype(
             np.int16
         ),  # [N_POLYLINE,]
-        "tl_states": np.array(file["tl_states"][idx]).astype(
-            np.float32
-        ),  # [N_TRAFFIC_LIGHTS, TIME, 2]
+        "tl_states": np.array(file["tl_states"][idx]).astype(np.float32),  # [N_TRAFFIC_LIGHTS, TIME, 2]
         "tl_states_categorical": np.array(file["tl_states_categorical"][idx]).astype(
             np.int64
         ),  # [N_TRAFFIC_LIGHTS, TIME,]
         "tl_avails": np.array(file["tl_avails"][idx]).astype(np.bool_),  # [N_TRAFFIC_LIGHTS, TIME,]
     }
 
-    sample["current_state_world_frame"] = sample["gt_states"][:, NUM_HISTORY_FRAMES].astype(
-        np.float32
-    )
     return sample
+
+
+def _get_scenario_from_h5_file(file: T.Mapping[str, np.ndarray]) -> T.Dict[str, np.ndarray]:
+    return {
+        "scenario_id": np.array(file["scenario_id"]).astype(np.int64),
+        "gt_states": np.array(file["gt_states"]).astype(np.float32),  # [N_AGENTS, TIME, FEATS]
+        "gt_states_avails": np.array(file["gt_states_avails"]).astype(
+            np.bool_
+        ),  # [N_AGENTS, TIME,]
+        "actor_type": np.array(file["actor_type"]).astype(np.int64),  # [N_AGENTS,]
+        "is_sdc": np.array(file["is_sdc"]).astype(np.bool_),  # [N_AGENTS,]
+        "tracks_to_predict": np.array(file["tracks_to_predict"]).astype(np.bool_),  # [N_AGENTS,]
+        "roadgraph_features": np.array(file["roadgraph_features"]).astype(
+            np.float32
+        ),  # [N_POLYLINE, N_POINTS, FEATS]
+        "roadgraph_features_mask": np.array(file["roadgraph_features_mask"]).astype(
+            np.bool_
+        ),  # [N_POLYLINE, N_POINTS]
+        "roadgraph_features_types": np.array(file["roadgraph_features_types"]).astype(
+            np.int64
+        ),  # [N_POLYLINE,]
+        "roadgraph_features_ids": np.array(file["roadgraph_features_ids"]).astype(
+            np.int16
+        ),  # [N_POLYLINE,]
+        "tl_states": np.array(file["tl_states"]).astype(np.float32),  # [N_TRAFFIC_LIGHTS, TIME, 2]
+        "tl_states_categorical": np.array(file["tl_states_categorical"]).astype(
+            np.int64
+        ),  # [N_TRAFFIC_LIGHTS, TIME,]
+        "tl_avails": np.array(file["tl_avails"]).astype(np.bool_),  # [N_TRAFFIC_LIGHTS, TIME,]
+    }
 
 
 class ProcessedDataset(Dataset):
     def __init__(
         self,
         filepath: str,
-        data_perturb_cfg: T.Optional[T.Any] = None,
-        train_with_tracks_to_predict: bool = False,
     ):
         """Do not open the h5 file here"""
-        self.file: T.Optional[h5py.File] = None
         self.filepath = filepath
-        self.perturb_cfg = data_perturb_cfg
-        self.train_with_tracks_to_predict = train_with_tracks_to_predict
+        self.file: T.Optional[h5py.File] = None
 
         # Open and close dataset just to extract the length
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
             self.dataset_len = len(file["gt_states"])  # Example version of the dataset
+
 
     def __len__(self) -> int:
         return self.dataset_len
@@ -164,19 +185,10 @@ class ProcessedDataset(Dataset):
         if self.file is None:
             self.file = h5py.File(self.filepath, "r", libver="latest", swmr=True)
 
-        sample = _get_scenario_from_h5_file(self.file, scenario_idx)
+        sample = _get_scenario_from_h5_file_using_idx(self.file, scenario_idx)
 
-        if self.train_with_tracks_to_predict:
-            sample = mask_only_target_agents_and_sdc(sample)
-
-        # Generate the agent sequence features, these are different than gt_states and we can change
-        # them to do some feature engineering
-        sample["gt_features"], sample["gt_features_avails"] = _generate_agent_features(
-            sample["gt_states"], sample["gt_states_avails"]
-        )
-
-        agent_batch = _generate_agent_centric_samples(sample)
-        return agent_batch
+        # agent_batch = _generate_agent_centric_samples(sample)
+        return sample 
 
     def __del__(self):
         if self.file is not None:
@@ -188,37 +200,30 @@ class ScenarioDataset(Dataset):
         self,
         filepath: str,
     ):
-        self.filepath = filepath
-
-        # Do not open the h5 file in the constructor, it has to be done in the __getitem__ method,
-        # we just need to open and close it to get the length of the dataset.
-        self.file: T.Optional[h5py.File] = None
-        with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
-            self.dataset_len = len(file["gt_states"])  # Example version of the dataset
+        self.datadir = pathlib.Path(filepath)
+        self.files = list(self.datadir.glob("scenario*.pt"))
+        self.coupled_indices = torch.load(self.datadir / "coupled_indices.pt")
 
     def __len__(self) -> int:
-        return self.dataset_len
+        return len(self.files)
 
-    def __getitem__(self, scenario_idx) -> T.Dict[str, np.ndarray]:
-        # NOTE: We open the dataset here so that each worker has its own file handle
-        if self.file is None:
-            self.file = h5py.File(self.filepath, "r", libver="latest", swmr=True)
+    def __getitem__(self, scenario_idx: int) -> T.Dict[str, np.ndarray]:
+        sample = torch.load(self.datadir / f"batch_{scenario_idx}.pt")
+        agent_indices = self.coupled_indices[self.coupled_indices[:, 0] == scenario_idx][:, 1]
 
-        coupled_indices = self.file["coupled_indices"]
-        agent_indices = coupled_indices[coupled_indices[:, 0] == scenario_idx][:, 1]
-
-        sample = _get_scenario_from_h5_file(self.file, scenario_idx)
+        sample = _get_scenario_from_h5_file(sample)
 
         batches = []
         for agent_idx in agent_indices:
             agent_sample = move_frame_to_agent_of_idx(agent_idx, sample)
 
             # TODO: Move to feature generation
-            # Generate the agent sequence features, these are different than gt_states and we can change
-            # them to do some feature engineering
-            agent_sample["gt_features"], agent_sample["gt_features_avails"] = _generate_agent_features(
-                agent_sample["gt_states"], agent_sample["gt_states_avails"]
+            agent_sample["gt_features"], agent_sample["gt_features_avails"] = (
+                _generate_agent_features(
+                    agent_sample["gt_states"], agent_sample["gt_states_avails"]
+                )
             )
+
             agent_sample["agent_to_predict"] = np.array(agent_idx).astype(np.int64)
             batches.append(agent_sample)
 
@@ -229,45 +234,25 @@ class AgentCentricDataset(Dataset):
     def __init__(
         self,
         filepath: str,
-        data_perturb_cfg: T.Optional[T.Any] = None,
     ):
-        # Do not open the h5 file in the constructor, it has to be done in the __getitem__ method
-        self.file: T.Optional[h5py.File] = None
-
-        self.filepath = filepath
-        self.perturb_cfg = data_perturb_cfg
-
-        # Open and close dataset just to extract the length
-        with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
-            self.dataset_len = len(file["coupled_indices"])  # Example version of the dataset
+        # Get all .pt files in the directory
+        self.datadir = pathlib.Path(filepath)
+        self.coupled_indices = torch.load(self.datadir / "coupled_indices.pt")
 
     def __len__(self) -> int:
-        return self.dataset_len
+        return len(self.coupled_indices)
 
-    def __getitem__(self, coupled_index: int) -> T.Dict[str, np.ndarray]:
-        # NOTE: We open the dataset here so that each worker has its own file handle
-        if self.file is None:
-            self.file = h5py.File(self.filepath, "r", libver="latest", swmr=True)
+    def __getitem__(self, idx: int) -> T.Dict[str, np.ndarray]:
+        scenario_idx, agent_idx = self.coupled_indices[idx]
 
-        scenario_idx, agent_idx = self.file["coupled_indices"][coupled_index]
-        sample = _get_scenario_from_h5_file(self.file, scenario_idx)
-
-        assert np.all(
-            sample["gt_states_avails"][sample["tracks_to_predict"], NUM_HISTORY_FRAMES]
-        ), "All agents should a valid current timestamp"
-
+        sample = torch.load(self.datadir / f"batch_{scenario_idx}.pt")
+        sample = _get_scenario_from_h5_file(sample)
         sample = move_frame_to_agent_of_idx(agent_idx, sample)
 
         # TODO: Move to feature generation
-        # Generate the agent sequence features, these are different than gt_states and we can change
-        # them to do some feature engineering
         sample["gt_features"], sample["gt_features_avails"] = _generate_agent_features(
             sample["gt_states"], sample["gt_states_avails"]
         )
 
         sample["agent_to_predict"] = np.array(agent_idx).astype(np.int64)
         return sample
-
-    def __del__(self):
-        if self.file is not None:
-            self.file.close()

@@ -95,7 +95,7 @@ def _parse_arguments() -> Namespace:
 
 if __name__ == "__main__":
     args = _parse_arguments()
-    
+
     if not args.fast_dev_run:
         task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
     else:
