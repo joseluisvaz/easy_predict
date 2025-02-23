@@ -31,7 +31,7 @@ def run_model_forward_pass(
         batch["tl_states"],
         batch["tl_states_categorical"],
         batch["tl_avails"],
-        batch["tracks_to_predict"], 
+        batch["tracks_to_predict"],
         batch["agent_to_predict"],
     )
 

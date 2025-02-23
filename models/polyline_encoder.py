@@ -3,6 +3,7 @@
 import torch
 import torch.nn as nn
 
+
 def build_mlps(c_in, mlp_channels=None, ret_before_act=False, without_norm=False):
     layers = []
     num_layers = len(mlp_channels)
@@ -27,10 +28,14 @@ def build_mlps(c_in, mlp_channels=None, ret_before_act=False, without_norm=False
 
 
 class PointNetPolylineEncoder(nn.Module):
-    def __init__(self, in_channels, hidden_dim, num_layers=3, num_pre_layers=1, out_channels=None):
+    def __init__(
+        self, in_channels, hidden_dim, num_layers=3, num_pre_layers=1, out_channels=None
+    ):
         super().__init__()
         self.pre_mlps = build_mlps(
-            c_in=in_channels, mlp_channels=[hidden_dim] * num_pre_layers, ret_before_act=False
+            c_in=in_channels,
+            mlp_channels=[hidden_dim] * num_pre_layers,
+            ret_before_act=False,
         )
         self.mlps = build_mlps(
             c_in=hidden_dim * 2,
@@ -74,7 +79,9 @@ class PointNetPolylineEncoder(nn.Module):
         polylines_feature = torch.cat(
             (
                 polylines_feature,
-                pooled_feature[:, :, None, :].repeat(1, 1, num_points_each_polylines, 1),
+                pooled_feature[:, :, None, :].repeat(
+                    1, 1, num_points_each_polylines, 1
+                ),
             ),
             dim=-1,
         )
@@ -91,7 +98,9 @@ class PointNetPolylineEncoder(nn.Module):
         feature_buffers[polylines_mask] = polylines_feature_valid
 
         # max-pooling
-        feature_buffers = feature_buffers.max(dim=2)[0]  # (batch_size, num_polylines, C)
+        feature_buffers = feature_buffers.max(dim=2)[
+            0
+        ]  # (batch_size, num_polylines, C)
 
         # out-mlp
         if self.out_mlps is not None:

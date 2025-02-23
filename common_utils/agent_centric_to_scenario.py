@@ -30,7 +30,7 @@ def pad_second_dim(tensor: torch.Tensor, target_size: int) -> torch.Tensor:
 
 
 def batch_scenarios_by_feature(
-    scenarios: T.Dict[str, T.List[T.Dict[str, torch.Tensor]]]
+    scenarios: T.Dict[str, T.List[T.Dict[str, torch.Tensor]]],
 ) -> T.Dict[str, torch.Tensor]:
     """Groups agent features by scenario and batches them together.
     Args:
@@ -45,7 +45,9 @@ def batch_scenarios_by_feature(
             stacked_feature = torch.stack(
                 [sample[feature_key] for sample in list_of_agent_samples], dim=0
             )[None, ...]
-            scenario[feature_key] = pad_second_dim(stacked_feature, MAX_AGENTS_TO_PREDICT)
+            scenario[feature_key] = pad_second_dim(
+                stacked_feature, MAX_AGENTS_TO_PREDICT
+            )
         scenario_batch.append(scenario)
 
     batched_scenarios = {}
@@ -73,7 +75,6 @@ def group_batch_by_scenario(
     # Group agent features by scenario
     scenarios: T.DefaultDict[str, T.List[T.Dict[str, torch.Tensor]]] = defaultdict(list)
     for i in range(batch_size):
-
         scenario_id = batch["scenario_id"][i].item()
         agent_id = batch["agent_to_predict"][i].item()
         agent_features = {

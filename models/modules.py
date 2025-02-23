@@ -1,6 +1,7 @@
 import torch
 from torch import nn, Tensor
 
+
 class DynamicsLayer(nn.Module):
     def __init__(self, delta_t: float, max_acc: float, max_yaw_rate: float) -> None:
         nn.Module.__init__(self)
@@ -18,7 +19,11 @@ class DynamicsLayer(nn.Module):
 
     def activation_fn(self, _input: Tensor) -> Tensor:
         return torch.stack(
-            (self.max_acc * torch.tanh(_input[..., 0]), self.max_yaw_rate * torch.tanh(_input[..., 1])), dim=-1,
+            (
+                self.max_acc * torch.tanh(_input[..., 0]),
+                self.max_yaw_rate * torch.tanh(_input[..., 1]),
+            ),
+            dim=-1,
         )
 
     def forward(self, state: Tensor, _input: Tensor) -> Tensor:

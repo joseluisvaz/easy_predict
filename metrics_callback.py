@@ -9,8 +9,8 @@ from PIL import Image
 from torch.utils.data import DataLoader
 
 from common_utils.visualization import plot_scene
-from data_utils.feature_generation import collate_waymo_scenario 
-from data_utils.processed_dataset import ScenarioDataset 
+from data_utils.feature_generation import collate_waymo_scenario
+from data_utils.processed_dataset import ScenarioDataset
 from models.inference import run_model_forward_pass
 
 
@@ -53,7 +53,9 @@ class OnTrainCallback(L.Callback):
             # Just extract a single sample from the batch and keep the batch dimension
             single_sample_batch = {k: v.cuda() for k, v in single_sample_batch.items()}
 
-            predicted_positions = run_model_forward_pass(pl_module.model, single_sample_batch)
+            predicted_positions = run_model_forward_pass(
+                pl_module.model, single_sample_batch
+            )
             self.log_plot_to_clearml(
                 pl_module,
                 pl_module.task.get_logger() if pl_module.task is not None else None,
@@ -64,7 +66,9 @@ class OnTrainCallback(L.Callback):
             )
 
         train_metric_values = pl_module.metrics.result()
-        for i, m in enumerate(["min_ade", "min_fde", "miss_rate", "overlap_rate", "map"]):
+        for i, m in enumerate(
+            ["min_ade", "min_fde", "miss_rate", "overlap_rate", "map"]
+        ):
             for j, n in enumerate(pl_module.metrics.metric_names):
                 self.log(f"metrics/{m}/{n}", float(train_metric_values[i, j]))
         pl_module.metrics.reset_state()
@@ -94,10 +98,13 @@ class OnTrainCallback(L.Callback):
         image = Image.open(buf)
         if image.mode == "RGBA":
             image = image.convert("RGB")
-            
+
         if logger is not None:
             logger.report_image(
-                title="sample", series=f"scene{scene_idx}", iteration=current_epoch, image=image
+                title="sample",
+                series=f"scene{scene_idx}",
+                iteration=current_epoch,
+                image=image,
             )
         else:
             image.save(f"data/visualizations/scene_{scene_idx}.png")

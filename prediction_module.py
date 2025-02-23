@@ -113,11 +113,15 @@ class PredictionLightningModule(L.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.hp.learning_rate, weight_decay=self.hp.weight_decay
+            self.parameters(),
+            lr=self.hp.learning_rate,
+            weight_decay=self.hp.weight_decay,
         )
 
         cosine_t_max = self.hp.max_epochs * len(self.train_dataloader())
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cosine_t_max
+        )
         return {
             "optimizer": optimizer,
             "lr_scheduler": {

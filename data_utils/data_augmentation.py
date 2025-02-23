@@ -32,8 +32,12 @@ def perturb_pose(perturbation_se2, batch: T.Dict[str, np.ndarray]):
     map_avails = batch["roadgraph_features_mask"]
     map_points = batch["roadgraph_features"][map_avails, :2]
     map_dirs = batch["roadgraph_features"][map_avails, 2:4]
-    batch["roadgraph_features"][map_avails, :2] = transform_points(map_points, perturbation_se2)
-    batch["roadgraph_features"][map_avails, 2:4] = transform_points(map_dirs, perturbation_so2)
+    batch["roadgraph_features"][map_avails, :2] = transform_points(
+        map_points, perturbation_se2
+    )
+    batch["roadgraph_features"][map_avails, 2:4] = transform_points(
+        map_dirs, perturbation_so2
+    )
 
     # Modify geometrical properties for tl features
     tl_avails = batch["tl_avails"]
@@ -100,7 +104,9 @@ class AnchorFrameAugmentation(DataAugmentation):
         current_availabilities = data["gt_features_avails"][:, NUM_HISTORY_FRAMES]
         tracks_to_predict = data["tracks_to_predict"]
 
-        available_and_predictable = np.logical_and(current_availabilities, tracks_to_predict)
+        available_and_predictable = np.logical_and(
+            current_availabilities, tracks_to_predict
+        )
         agent_indices = np.arange(len(available_and_predictable))
         selected_agent_id = np.random.choice(agent_indices[available_and_predictable])
 

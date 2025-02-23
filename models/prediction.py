@@ -12,7 +12,9 @@ from models.rnn_cells import MultiAgentLSTMCell
 MAX_NUM_TRACKS_TO_PREDICT: T.Final = 8
 
 
-def concatenate_historical_features(history_states: torch.Tensor, actor_types: torch.Tensor):
+def concatenate_historical_features(
+    history_states: torch.Tensor, actor_types: torch.Tensor
+):
     """Concatenate history states with one-hot encoded actor types.
     Args:
         history_states: (n_batch, n_agents, n_past, _)
@@ -56,6 +58,7 @@ def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
         axis=-1,
     )
 
+
 def concatenate_tl_features(tl_feats: torch.Tensor, tl_types: torch.Tensor):
     """Concatenate map_feats with one-hot encoded map types.
     Args:
@@ -64,7 +67,7 @@ def concatenate_tl_features(tl_feats: torch.Tensor, tl_types: torch.Tensor):
     Returns:
         (n_batch, n_tls, n_timesteps, n_features + n_classes)
     """
-    
+
     NUM_CLASSES: T.Final = 9
     types_one_hot = F.one_hot(tl_types, num_classes=NUM_CLASSES).float()
     return torch.cat(
@@ -91,7 +94,7 @@ class Encoder(nn.Module):
             hidden: (n_batch, n_agents, n_timesteps, _)
             context: (n_batch, n_agents, n_timesteps, _)
         """
-        
+
         n_batch, n_agents, n_timesteps, _ = sequence.shape
         hidden, context = self.lstm_cell.get_initial_hidden_state(
             (n_batch, n_agents, self.hidden_size), sequence.device, requires_grad=True
@@ -124,11 +127,16 @@ class Decoder(nn.Module):
         )
 
         self.state_encoder = build_mlps(
-            config.decoder.input_size, [128, 64, 128], ret_before_act=True, without_norm=True
+            config.decoder.input_size,
+            [128, 64, 128],
+            ret_before_act=True,
+            without_norm=True,
         )
 
-    def step_physical_state(self, state: torch.Tensor, action: torch.Tensor) -> torch.Tensor:
-        """Update the feature vector using the dynamics function, this copies 
+    def step_physical_state(
+        self, state: torch.Tensor, action: torch.Tensor
+    ) -> torch.Tensor:
+        """Update the feature vector using the dynamics function, this copies
         all the features to the policy and replaces the state with the new computed states
         Args:
             state: (n_batch, n_agents, n_features)
@@ -142,10 +150,16 @@ class Decoder(nn.Module):
         next_state[..., : next_physical_state.shape[-1]] = next_physical_state
         return next_state
 
-    def forward(self, current_features, current_availabilities, context_embeddings, context_avails):
-        """Forward pass of the decoder. when we are using agent centric representation we are only 
+    def forward(
+        self,
+        current_features,
+        current_availabilities,
+        context_embeddings,
+        context_avails,
+    ):
+        """Forward pass of the decoder. when we are using agent centric representation we are only
         decoding a single agent, therefore n_agents is 1.
-        
+
         Args:
             current_features: (n_batch, n_agents, n_features)
             current_availabilities: (n_batch, n_agents)
@@ -180,12 +194,15 @@ class Decoder(nn.Module):
 
 
 class PredictionModel(nn.Module):
-
     NUM_MCG_LAYERS = 4
     MAP_INPUT_SIZE = 20  # x, y, direction and one hot encoded type
 
     def __init__(
-        self, input_features, hidden_size, n_timesteps, model_config,
+        self,
+        input_features,
+        hidden_size,
+        n_timesteps,
+        model_config,
     ):
         super(PredictionModel, self).__init__()
         self.hidden_size = hidden_size
@@ -199,17 +216,24 @@ class PredictionModel(nn.Module):
         self.map_encoder = PointNetPolylineEncoder(
             24, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
         )
-        
+
         self.use_tl_encoder = model_config.tl_encoder.use_tl_encoder
 
-        self.tl_encoder = PointNetPolylineEncoder(
-            model_config.tl_encoder.input_size, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
-        ) if self.use_tl_encoder else None
+        self.tl_encoder = (
+            PointNetPolylineEncoder(
+                model_config.tl_encoder.input_size,
+                64,
+                num_layers=5,
+                num_pre_layers=3,
+                out_channels=hidden_size,
+            )
+            if self.use_tl_encoder
+            else None
+        )
 
         self.global_attention = SelfAttentionBlock(
             embed_dim=hidden_size, num_heads=8, dropout_p=0.0
         )
-
 
     def forward(
         self,
@@ -239,12 +263,16 @@ class PredictionModel(nn.Module):
 
         hidden_actor = self.actor_encoder(history_features, history_availabilities)
         hidden_map = self.map_encoder(map_feats, map_avails)  # [N_BATCH, N_POLYLINES]
-        
+
         if self.use_tl_encoder:
             tl_persistent_avails = torch.any(tl_avails, dim=2)
-            hidden_tl = self.tl_encoder(tl_feats, tl_avails)  # [N_BATCH, N_TRAFFIC_LIGHTS]
+            hidden_tl = self.tl_encoder(
+                tl_feats, tl_avails
+            )  # [N_BATCH, N_TRAFFIC_LIGHTS]
             global_features = torch.cat([hidden_actor, hidden_map, hidden_tl], dim=1)
-            global_avails = torch.cat([actor_avails, polyline_avails, tl_persistent_avails], dim=1)
+            global_avails = torch.cat(
+                [actor_avails, polyline_avails, tl_persistent_avails], dim=1
+            )
         else:
             global_features = torch.cat([hidden_actor, hidden_map], dim=1)
             global_avails = torch.cat([actor_avails, polyline_avails], dim=1)
@@ -252,14 +280,22 @@ class PredictionModel(nn.Module):
         # Perform self attention on all the features before sending it to the cross attention mask
         global_features = self.global_attention(global_features, mask=~global_avails)
 
-        # Get the agent of interest to predict and add a new agent dimension of size 1 for compatibility 
-        # with the decoder        
-        batch_indices = torch.arange(history_features.shape[0], device=history_features.device)
-        current_features = history_features[batch_indices, agent_to_predict, -1][:, None]
-        current_availabilities = history_availabilities[batch_indices, agent_to_predict, -1][:, None]
-        
-        assert torch.all(current_availabilities), "All current availabilities should be True "
-            
+        # Get the agent of interest to predict and add a new agent dimension of size 1 for compatibility
+        # with the decoder
+        batch_indices = torch.arange(
+            history_features.shape[0], device=history_features.device
+        )
+        current_features = history_features[batch_indices, agent_to_predict, -1][
+            :, None
+        ]
+        current_availabilities = history_availabilities[
+            batch_indices, agent_to_predict, -1
+        ][:, None]
+
+        assert torch.all(current_availabilities), (
+            "All current availabilities should be True "
+        )
+
         output = self.decoder(
             current_features,
             current_availabilities,

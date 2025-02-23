@@ -8,11 +8,12 @@ from prediction_module import PredictionLightningModule
 
 
 def main(use_gpu: bool, ckpt_path: str):
-
     hyperparameters = OmegaConf.load("configs/hyperparameters.yaml")
 
     module = (
-        PredictionLightningModule(False, hyperparameters, clearml_task=None, cosine_t_max=100)
+        PredictionLightningModule(
+            False, hyperparameters, clearml_task=None, cosine_t_max=100
+        )
         if not ckpt_path
         else PredictionLightningModule.load_from_checkpoint(
             ckpt_path,

@@ -8,7 +8,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from data_utils.feature_description import MAX_AGENTS_TO_PREDICT 
+from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
 from data_utils.processed_dataset import _get_scenario_from_h5_file_using_idx
 
 
@@ -34,7 +34,6 @@ class PickledDataset(Dataset):
         with h5py.File(self.filepath, "r", libver="latest", swmr=True) as file:
             self.dataset_len = len(file["gt_states"])  # Example version of the dataset
 
-
     def __len__(self) -> int:
         return self.dataset_len
 
@@ -50,7 +49,6 @@ class PickledDataset(Dataset):
 
 
 def main(data_dir: str, out: str) -> None:
-
     dataset = PickledDataset(data_dir)
     dataloader = DataLoader(
         dataset,

@@ -37,7 +37,9 @@ def _create_h5_datasets(file: h5py.File, batch_data: T.Dict[str, np.ndarray]) ->
         )
 
 
-def _append_to_h5_datasets(file: h5py.File, batch_data: T.Dict[str, np.ndarray]) -> None:
+def _append_to_h5_datasets(
+    file: h5py.File, batch_data: T.Dict[str, np.ndarray]
+) -> None:
     """Append a batch of new data samples to the h5 file."""
     for dataset_name, data in batch_data.items():
         number_of_elements = file[dataset_name].shape[0]
@@ -46,7 +48,6 @@ def _append_to_h5_datasets(file: h5py.File, batch_data: T.Dict[str, np.ndarray])
 
 
 def main(data_dir: str, out: str):
-
     # Set train_with_tracks_to_predict to False to generate the data with the 128 full agent data
     dataset = WaymoH5Dataset(data_dir, train_with_tracks_to_predict=False)
     dataloader = DataLoader(
@@ -62,7 +63,6 @@ def main(data_dir: str, out: str):
     )
 
     with h5py.File(out, "w") as file:
-
         dataset_created_flag = False
         for batch in tqdm(dataloader):
             if not dataset_created_flag:
@@ -76,12 +76,11 @@ def main(data_dir: str, out: str):
 
         coupled_indices = []
         for dataset_idx in tqdm(range(num_scenarios), total=num_scenarios):
-
             scenario_id = file["scenario_id"][dataset_idx]
             assert scenario_id >= 0
-            tracks_to_predict_mask = np.array(file["tracks_to_predict"][dataset_idx]).astype(
-                np.bool_
-            )
+            tracks_to_predict_mask = np.array(
+                file["tracks_to_predict"][dataset_idx]
+            ).astype(np.bool_)
 
             for agent_id in range(MAX_AGENTS_TO_PREDICT):
                 if not tracks_to_predict_mask[agent_id]:

@@ -4,6 +4,7 @@ from torch import nn, Tensor
 
 import typing as T
 
+
 class NewGELU(nn.Module):
     """
     Implementation of the GELU activation function currently in Google BERT repo (identical to OpenAI GPT).
@@ -14,14 +15,21 @@ class NewGELU(nn.Module):
         return (
             0.5
             * x
-            * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
+            * (
+                1.0
+                + torch.tanh(
+                    math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))
+                )
+            )
         )
 
 
 class SelfAttentionBlock(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, dropout_p: float):
         super(SelfAttentionBlock, self).__init__()
-        self.mha = nn.MultiheadAttention(embed_dim, num_heads, dropout_p, batch_first=True)
+        self.mha = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout_p, batch_first=True
+        )
 
         self.mlp = nn.ModuleDict(
             dict(
@@ -32,9 +40,13 @@ class SelfAttentionBlock(nn.Module):
             )
         )
         m = self.mlp
-        self.mlpf = lambda x: m.dropout(m.c_downproj(m.act(m.c_upproj(x))))  # MLP forward
+        self.mlpf = lambda x: m.dropout(
+            m.c_downproj(m.act(m.c_upproj(x)))
+        )  # MLP forward
 
-    def forward(self, x: Tensor, mask: Tensor, pos_embedding: T.Optional[Tensor] = None) -> Tensor:
+    def forward(
+        self, x: Tensor, mask: Tensor, pos_embedding: T.Optional[Tensor] = None
+    ) -> Tensor:
         """Interaction block for cross attention
         x: embedding
         cross_mask: mask for embedding, representing the keys
@@ -49,7 +61,9 @@ class SelfAttentionBlock(nn.Module):
 class CrossAttentionBlock(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, dropout_p: float):
         super(CrossAttentionBlock, self).__init__()
-        self.mha = nn.MultiheadAttention(embed_dim, num_heads, dropout_p, batch_first=True)
+        self.mha = nn.MultiheadAttention(
+            embed_dim, num_heads, dropout_p, batch_first=True
+        )
 
         self.mlp = nn.ModuleDict(
             dict(
@@ -60,7 +74,9 @@ class CrossAttentionBlock(nn.Module):
             )
         )
         m = self.mlp
-        self.mlpf = lambda x: m.dropout(m.c_downproj(m.act(m.c_upproj(x))))  # MLP forward
+        self.mlpf = lambda x: m.dropout(
+            m.c_downproj(m.act(m.c_upproj(x)))
+        )  # MLP forward
 
     def forward(self, x: Tensor, cross_x: Tensor, cross_mask: Tensor) -> Tensor:
         """Interaction block for cross attention
@@ -68,7 +84,9 @@ class CrossAttentionBlock(nn.Module):
         cross_x: embedding to attend to
         cross_mask: mask for cross_x embedding, representing the keys
         """
-        attention, _ = self.mha(query=x, key=cross_x, value=cross_x, key_padding_mask=cross_mask)
+        attention, _ = self.mha(
+            query=x, key=cross_x, value=cross_x, key_padding_mask=cross_mask
+        )
         x = x + attention
         x = x + self.mlpf(x)
         return x

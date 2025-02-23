@@ -16,7 +16,12 @@ torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")
 
 
-def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str], task: T.Optional[Task]):
+def main(
+    fast_dev_run: bool,
+    use_gpu: bool,
+    ckpt_path: T.Optional[str],
+    task: T.Optional[Task],
+):
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
@@ -88,7 +93,9 @@ if __name__ == "__main__":
     args = _parse_arguments()
 
     if not args.fast_dev_run:
-        task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
+        task = Task.init(
+            project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG"
+        )
     else:
         task = None
     main(args.fast_dev_run, args.gpu, args.ckpt, task)

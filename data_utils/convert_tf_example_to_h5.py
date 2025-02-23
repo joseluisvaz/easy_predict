@@ -24,7 +24,10 @@ FEATURE_DESCRIPTION: T.Dict = dict(STATE_FEATURES)
 def _parse_arguments() -> Namespace:
     parser = ArgumentParser(allow_abbrev=True)
     parser.add_argument(
-        "--data-dir", type=str, required=True, help="Path to the folder with the tf records."
+        "--data-dir",
+        type=str,
+        required=True,
+        help="Path to the folder with the tf records.",
     )
     parser.add_argument("--out", type=str, required=True, help="Output h5 file")
     return parser.parse_args()
@@ -35,7 +38,9 @@ def process_roadgraph_features(decoded_example: T.Dict[str, np.ndarray]) -> np.n
     return np.concatenate([decoded_example[key] for key in ROADGRAPH_FEATURES], axis=-1)
 
 
-def process_traffic_light_features(decoded_example: T.Dict[str, np.ndarray]) -> np.ndarray:
+def process_traffic_light_features(
+    decoded_example: T.Dict[str, np.ndarray],
+) -> np.ndarray:
     """Return the merged ordered map of traffic light features."""
     # Transpose since traffic light data has the feature dimension as the first dim.
     return np.concatenate(
@@ -43,7 +48,9 @@ def process_traffic_light_features(decoded_example: T.Dict[str, np.ndarray]) -> 
     )
 
 
-def process_merged_agent_features(decoded_example: T.Dict[str, np.ndarray]) -> np.ndarray:
+def process_merged_agent_features(
+    decoded_example: T.Dict[str, np.ndarray],
+) -> np.ndarray:
     """Merge the agent features into a single numpy array."""
     processed_example = {}
     for key, value in decoded_example.items():
@@ -84,7 +91,9 @@ def _generate_records_from_files(
         )
 
 
-def _process_files(file_paths: T.List[str], queue: mp.Queue, progress_bar: tqdm) -> None:
+def _process_files(
+    file_paths: T.List[str], queue: mp.Queue, progress_bar: tqdm
+) -> None:
     """Process files and put the results in a queue."""
     for record in _generate_records_from_files(file_paths):
         queue.put(record)
@@ -95,11 +104,17 @@ def _process_files(file_paths: T.List[str], queue: mp.Queue, progress_bar: tqdm)
 def _get_file_list(data_dir: str) -> T.List[str]:
     """Get file list from a data path."""
     assert pathlib.Path(data_dir).is_dir()
-    return [str(file) for file in pathlib.Path(data_dir).absolute().rglob("*") if file.is_file()]
+    return [
+        str(file)
+        for file in pathlib.Path(data_dir).absolute().rglob("*")
+        if file.is_file()
+    ]
 
 
 def _create_h5_datasets(
-    file: h5py.File, new_data: T.Tuple[np.ndarray, np.ndarray], max_agents: int = MAX_AGENTS
+    file: h5py.File,
+    new_data: T.Tuple[np.ndarray, np.ndarray],
+    max_agents: int = MAX_AGENTS,
 ) -> None:
     """Create a dataset in the h5 file for every field in the new data sample."""
     actor_data, roadgraph_data, traffic_light_data = new_data
@@ -109,7 +124,7 @@ def _create_h5_datasets(
 
     roadgraph_tensor = np.expand_dims(roadgraph_data, axis=0)  # Add batch dimension
     roadgraph_maxshape = (None, *roadgraph_tensor.shape[1:])
-    
+
     tl_tensor = np.expand_dims(traffic_light_data, axis=0)  # Add batch dimension
     tl_maxshape = (None, *tl_tensor.shape[1:])
 
@@ -142,7 +157,9 @@ def _append_to_h5_datasets(
     """Append a batch of new data samples to the h5 file."""
 
     def add_to_dataset(dataset_name: str, batch_data: T.List[np.ndarray]) -> None:
-        tensors = [np.expand_dims(data, axis=0) for data in batch_data]  # Add batch dimension
+        tensors = [
+            np.expand_dims(data, axis=0) for data in batch_data
+        ]  # Add batch dimension
         tensors = np.concatenate(tensors, axis=0)
         number_of_elements = file[dataset_name].shape[0]
         file[dataset_name].resize(number_of_elements + tensors.shape[0], axis=0)
@@ -161,7 +178,9 @@ def _convert_to_h5(data_dir: str, out_path: str) -> None:
     file_paths = _get_file_list(data_dir)
     queue = mp.Queue(maxsize=10 * BATCH_SIZE)
     with tqdm(total=VALIDATION_LENGTH, desc="Processing files") as progress_bar:
-        process = mp.Process(target=_process_files, args=(file_paths, queue, progress_bar))
+        process = mp.Process(
+            target=_process_files, args=(file_paths, queue, progress_bar)
+        )
         process.start()
 
         with h5py.File(out_path, "w") as f:
