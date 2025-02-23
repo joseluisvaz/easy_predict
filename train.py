@@ -1,16 +1,7 @@
-import warnings
-
-# Ignore the warning about nested tensors to not spam the terminal
-warnings.filterwarnings(
-    "ignore",
-    message="The PyTorch API of nested tensors is in prototype stage and will change in the near future.",
-)
-
 import typing as T
 from argparse import ArgumentParser, Namespace
 
 import lightning as L
-import matplotlib.pyplot as plt
 import torch
 from clearml import Task
 from lightning.pytorch.callbacks import ModelCheckpoint

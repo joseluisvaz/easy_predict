@@ -2,7 +2,6 @@ from google.protobuf import text_format
 import typing as T
 
 from common_utils.agent_centric_to_scenario import (
-    batch_scenarios_by_feature,
     group_batch_by_scenario,
 )
 from waymo_open_dataset.metrics.ops import py_metrics_ops

@@ -1,4 +1,3 @@
-import copy
 import pathlib
 import typing as T
 from argparse import ArgumentParser, Namespace
@@ -9,8 +8,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from data_utils.feature_description import MAX_AGENTS_TO_PREDICT, NUM_HISTORY_FRAMES
-from data_utils.feature_generation import WaymoH5Dataset
+from data_utils.feature_description import MAX_AGENTS_TO_PREDICT 
 from data_utils.processed_dataset import _get_scenario_from_h5_file_using_idx
 
 

@@ -2,7 +2,6 @@ import typing as T
 
 import lightning as L
 import torch
-import torch.nn.functional as F
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 

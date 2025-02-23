@@ -1,17 +1,14 @@
 import io
 import itertools
 import typing as T
-from dataclasses import dataclass
 
 import lightning as L
 import torch
 from matplotlib import pyplot as plt
 from PIL import Image
 from torch.utils.data import DataLoader
-from torchinfo import summary
 
 from common_utils.visualization import plot_scene
-from data_utils.feature_description import NUM_HISTORY_FRAMES
 from data_utils.feature_generation import collate_waymo_scenario 
 from data_utils.processed_dataset import ScenarioDataset 
 from models.inference import run_model_forward_pass

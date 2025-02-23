@@ -7,7 +7,6 @@ from typing import Any, Dict, Final, Generic, List, Optional, TypeVar
 import h5py
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert

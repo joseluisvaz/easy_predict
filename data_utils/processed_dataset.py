@@ -1,4 +1,3 @@
-import copy
 import pathlib
 import typing as T
 
@@ -9,7 +8,6 @@ from torch.utils.data import Dataset
 
 from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.data_augmentation import move_frame_to_agent_of_idx
-from data_utils.feature_description import NUM_HISTORY_FRAMES
 
 
 def mask_only_target_agents_and_sdc(batch: T.Dict[str, np.ndarray]) -> T.Dict[str, np.ndarray]:
@@ -129,8 +127,6 @@ def _get_scenario_from_h5_file_using_idx(file: T.Mapping[str, np.ndarray], idx: 
         ),  # [N_TRAFFIC_LIGHTS, TIME,]
         "tl_avails": np.array(file["tl_avails"][idx]).astype(np.bool_),  # [N_TRAFFIC_LIGHTS, TIME,]
     }
-
-    return sample
 
 
 def _get_scenario_from_h5_file(file: T.Mapping[str, np.ndarray]) -> T.Dict[str, np.ndarray]:
