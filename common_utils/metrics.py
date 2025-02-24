@@ -13,7 +13,7 @@ import torch
 from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
 
 
-def _default_metrics_config():
+def _default_metrics_config() -> motion_metrics_pb2.MotionMetricsConfig:
     config = motion_metrics_pb2.MotionMetricsConfig()
     config_text = """
         track_steps_per_second: 5
@@ -48,19 +48,19 @@ def _default_metrics_config():
 class MotionMetrics(tf.keras.metrics.Metric):
     """Wrapper for motion metrics computation."""
 
-    def __init__(self, config):
+    def __init__(self, config: motion_metrics_pb2.MotionMetricsConfig):
         super().__init__()
-        self._prediction_trajectory = []
-        self._prediction_score = []
-        self._ground_truth_trajectory = []
-        self._ground_truth_is_valid = []
-        self._prediction_ground_truth_indices = []
-        self._prediction_ground_truth_indices_mask = []
-        self._object_type = []
+        self._prediction_trajectory: T.List[tf.Tensor] = []
+        self._prediction_score: T.List[tf.Tensor] = []
+        self._ground_truth_trajectory: T.List[tf.Tensor] = []
+        self._ground_truth_is_valid: T.List[tf.Tensor] = []
+        self._prediction_ground_truth_indices: T.List[tf.Tensor] = []
+        self._prediction_ground_truth_indices_mask: T.List[tf.Tensor] = []
+        self._object_type: T.List[tf.Tensor] = []
         self._metrics_config = config
         self.metric_names = config_util.get_breakdown_names_from_motion_config(config)
 
-    def reset_state(self):
+    def reset_state(self) -> None:
         self._prediction_trajectory = []
         self._prediction_score = []
         self._ground_truth_trajectory = []
@@ -96,7 +96,7 @@ class MotionMetrics(tf.keras.metrics.Metric):
 
     def update_state(
         self, batch: T.Dict[str, torch.Tensor], full_predicted_positions: torch.Tensor
-    ):
+    ) -> None:
         batched_scenarios = group_batch_by_scenario(batch, full_predicted_positions)
 
         # Chop all the tensors to match the number of predicted agents the tracks to predict mask
@@ -139,7 +139,7 @@ class MotionMetrics(tf.keras.metrics.Metric):
             object_type=actor_type,
         )
 
-    def result(self):
+    def result(self) -> T.Dict[str, float]:
         # [batch_size, num_preds, top_k, num_agents, steps, 2].
         prediction_trajectory = tf.concat(self._prediction_trajectory, 0)
         # [batch_size, num_preds, top_k].

@@ -2,7 +2,9 @@ import torch
 import math
 
 
-def gen_sineembed_for_position(pos_tensor, hidden_dim=256):
+def gen_sineembed_for_position(
+    pos_tensor: torch.Tensor, hidden_dim: int = 256
+) -> torch.Tensor:
     """Mostly copy-paste from https://github.com/IDEA-opensource/DAB-DETR/"""
     # n_query, bs, _ = pos_tensor.size()
     # sineembed_tensor = torch.zeros(n_query, bs, 256)

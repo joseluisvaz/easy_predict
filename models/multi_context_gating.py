@@ -1,3 +1,5 @@
+import typing as T
+
 import torch
 import torch.nn as nn
 from torch_scatter import scatter_max
@@ -16,7 +18,7 @@ class ContextGating(nn.Module):
         hidden: torch.Tensor,
         context_embedding: torch.Tensor,
         availabilities: torch.Tensor,
-    ):
+    ) -> T.Tuple[torch.Tensor, torch.Tensor]:
         """
         hidden of size (batch, agents, features)
         context_embeddig (batch, features)
@@ -55,14 +57,20 @@ class MultiContextGating(nn.Module):
 
         self.context_gatings = nn.ModuleList(context_gatings)
 
-    def _get_initial_context(self, batch_size, hidden_size, device):
+    def _get_initial_context(
+        self, batch_size: int, hidden_size: int, device: torch.device
+    ) -> torch.Tensor:
         """Returns a trainable initial context of shape: (batch_size, hidden_size)"""
         return torch.ones(batch_size, hidden_size, device=device, requires_grad=True)
 
-    def _compute_running_mean(self, previous_mean, new_value, i):
+    def _compute_running_mean(
+        self, previous_mean: torch.Tensor, new_value: torch.Tensor, i: int
+    ) -> torch.Tensor:
         return (previous_mean * i + new_value) / i
 
-    def forward(self, hidden, availabilities):
+    def forward(
+        self, hidden: torch.Tensor, availabilities: torch.Tensor
+    ) -> torch.Tensor:
         """
         hidden has shape (batch_size, n_agents, hidden_size)
         availabilities has shape (batch_size, n_agents,)

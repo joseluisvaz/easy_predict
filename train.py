@@ -21,7 +21,7 @@ def main(
     use_gpu: bool,
     ckpt_path: T.Optional[str],
     task: T.Optional[Task],
-):
+) -> None:
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 

@@ -104,8 +104,8 @@ class MultiAgentFeatures(Generic[Array]):
         )
 
     def transform_with_se3(self, transform: Array) -> None:
-        rotation = get_so2_from_se2(transform)  # type: ignore
-        relative_yaw = get_yaw_from_se2(transform)  # type: ignore
+        rotation = get_so2_from_se2(transform)
+        relative_yaw = get_yaw_from_se2(transform)
 
         avails = self.gt_states_avails
 
@@ -228,7 +228,7 @@ def get_inside_bounds_mask(xy_positions: np.ndarray, bounds: np.ndarray) -> np.n
 
 def _filter_inside_relevant_area(
     map_positions: np.ndarray, agent_positions: np.ndarray
-) -> Dict[str, np.ndarray]:
+) -> np.ndarray:
     """Filter data inside relevant area, returns a mask"""
     # If the map is already small then just return a valid mask
     if len(map_positions) <= MAP_MIN_NUM_OF_POINTS:
@@ -250,8 +250,14 @@ def _parse_roadgraph_features(
     decoded_example: Dict[str, np.ndarray],
     to_ego_se3: np.ndarray,
     valid_positions: np.ndarray,
-) -> Dict[str, torch.Tensor]:
-    def _apply_validity_masks(points, dirs, valid, types, ids):
+) -> Dict[str, np.ndarray]:
+    def _apply_validity_masks(
+        points: np.ndarray,
+        dirs: np.ndarray,
+        valid: np.ndarray,
+        types: np.ndarray,
+        ids: np.ndarray,
+    ) -> T.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Filter the roadgraph based on validity and type of the roadgraph element"""
         points = points[valid]  # [M, 2]
         dirs = dirs[valid]  # [M, 2]
@@ -286,7 +292,7 @@ def _parse_roadgraph_features(
     )
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
 
-    def _subsample_sequence(sequence: np.ndarray, subsample: int):
+    def _subsample_sequence(sequence: np.ndarray, subsample: int) -> np.ndarray:
         if len(sequence) <= 3:
             return sequence
         indices = np.arange(1, len(sequence) - 1, subsample)
@@ -299,7 +305,7 @@ def _parse_roadgraph_features(
 
     def _select_and_decompose_sequences(
         flattened_sequences: np.ndarray, types: np.ndarray
-    ):
+    ) -> List[np.ndarray]:
         """Select the unique ids and decompose the polylines into smaller pieces"""
         decomposed = []
         for id in unique_ids:
@@ -316,7 +322,7 @@ def _parse_roadgraph_features(
                 decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
         return decomposed
 
-    def _resample_ids(flattened_ids: np.ndarray, types: np.ndarray):
+    def _resample_ids(flattened_ids: np.ndarray, types: np.ndarray) -> np.ndarray:
         """Similar to the previous function but has a counter to populate the new ids"""
         decomposed = []
         id_counter = 1

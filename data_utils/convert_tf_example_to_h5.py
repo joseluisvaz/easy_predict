@@ -68,7 +68,7 @@ def process_merged_agent_features(
 
 def _generate_records_from_files(
     files: T.List[str],
-) -> T.Generator[T.Tuple[np.ndarray, np.ndarray], None, None]:
+) -> T.Generator[T.Tuple[np.ndarray, np.ndarray, np.ndarray], None, None]:
     """Generates the records from the files.
 
     Returns: the agent, map and traffic light features, they are
@@ -113,7 +113,7 @@ def _get_file_list(data_dir: str) -> T.List[str]:
 
 def _create_h5_datasets(
     file: h5py.File,
-    new_data: T.Tuple[np.ndarray, np.ndarray],
+    new_data: T.Tuple[np.ndarray, np.ndarray, np.ndarray],
     max_agents: int = MAX_AGENTS,
 ) -> None:
     """Create a dataset in the h5 file for every field in the new data sample."""
@@ -152,15 +152,16 @@ def _create_h5_datasets(
 
 
 def _append_to_h5_datasets(
-    file: h5py.File, batch_data: T.List[T.Tuple[np.ndarray, np.ndarray]]
+    file: h5py.File, batch_data: T.List[T.Tuple[np.ndarray, np.ndarray, np.ndarray]]
 ) -> None:
     """Append a batch of new data samples to the h5 file."""
 
     def add_to_dataset(dataset_name: str, batch_data: T.List[np.ndarray]) -> None:
-        tensors = [
-            np.expand_dims(data, axis=0) for data in batch_data
-        ]  # Add batch dimension
-        tensors = np.concatenate(tensors, axis=0)
+        # Add batch dimension and concatenate all the tensors in the batch
+        tensors = np.concatenate(
+            [np.expand_dims(data, axis=0) for data in batch_data],
+            axis=0,
+        )
         number_of_elements = file[dataset_name].shape[0]
         file[dataset_name].resize(number_of_elements + tensors.shape[0], axis=0)
         file[dataset_name][-tensors.shape[0] :] = tensors
@@ -176,7 +177,7 @@ def _append_to_h5_datasets(
 def _convert_to_h5(data_dir: str, out_path: str) -> None:
     """Convert the Waymo dataset into an h5 file that we can use for training."""
     file_paths = _get_file_list(data_dir)
-    queue = mp.Queue(maxsize=10 * BATCH_SIZE)
+    queue: mp.Queue = mp.Queue(maxsize=10 * BATCH_SIZE)
     with tqdm(total=VALIDATION_LENGTH, desc="Processing files") as progress_bar:
         process = mp.Process(
             target=_process_files, args=(file_paths, queue, progress_bar)

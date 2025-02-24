@@ -1,10 +1,17 @@
-# From https://github.com/sshaoshuai/MTR
+# Modified from https://github.com/sshaoshuai/MTR
+
+import typing as T
 
 import torch
 import torch.nn as nn
 
 
-def build_mlps(c_in, mlp_channels=None, ret_before_act=False, without_norm=False):
+def build_mlps(
+    c_in: int,
+    mlp_channels: T.List[int],
+    ret_before_act: bool = False,
+    without_norm: bool = False,
+) -> nn.Sequential:
     layers = []
     num_layers = len(mlp_channels)
 
@@ -29,7 +36,12 @@ def build_mlps(c_in, mlp_channels=None, ret_before_act=False, without_norm=False
 
 class PointNetPolylineEncoder(nn.Module):
     def __init__(
-        self, in_channels, hidden_dim, num_layers=3, num_pre_layers=1, out_channels=None
+        self,
+        in_channels: int,
+        hidden_dim: int,
+        num_layers: int = 3,
+        num_pre_layers: int = 1,
+        out_channels: T.Optional[int] = None,
     ):
         super().__init__()
         self.pre_mlps = build_mlps(
@@ -53,7 +65,9 @@ class PointNetPolylineEncoder(nn.Module):
         else:
             self.out_mlps = None
 
-    def forward(self, polylines, polylines_mask):
+    def forward(
+        self, polylines: torch.Tensor, polylines_mask: torch.Tensor
+    ) -> torch.Tensor:
         """
         Args:
             polylines (batch_size, num_polylines, num_points_each_polylines, C):

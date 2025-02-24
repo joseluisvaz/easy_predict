@@ -3,6 +3,7 @@ import typing as T
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from omegaconf import DictConfig
 
 from models.attention import CrossAttentionBlock, SelfAttentionBlock
 from models.modules import DynamicsLayer
@@ -14,7 +15,7 @@ MAX_NUM_TRACKS_TO_PREDICT: T.Final = 8
 
 def concatenate_historical_features(
     history_states: torch.Tensor, actor_types: torch.Tensor
-):
+) -> torch.Tensor:
     """Concatenate history states with one-hot encoded actor types.
     Args:
         history_states: (n_batch, n_agents, n_past, _)
@@ -37,7 +38,9 @@ def concatenate_historical_features(
     )
 
 
-def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
+def concatenate_map_features(
+    map_feats: torch.Tensor, map_types: torch.Tensor
+) -> torch.Tensor:
     """Concatenate map_feats with one-hot encoded map types.
     Args:
         map_feats: (n_batch, n_polylines, n_points, _)
@@ -59,7 +62,9 @@ def concatenate_map_features(map_feats: torch.Tensor, map_types: torch.Tensor):
     )
 
 
-def concatenate_tl_features(tl_feats: torch.Tensor, tl_types: torch.Tensor):
+def concatenate_tl_features(
+    tl_feats: torch.Tensor, tl_types: torch.Tensor
+) -> torch.Tensor:
     """Concatenate map_feats with one-hot encoded map types.
     Args:
         tl_feats: (n_batch, n_tls, n_timesteps, _)
@@ -80,12 +85,14 @@ def concatenate_tl_features(tl_feats: torch.Tensor, tl_types: torch.Tensor):
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_size, hidden_size):
+    def __init__(self, input_size: int, hidden_size: int):
         super(Encoder, self).__init__()
         self.lstm_cell = MultiAgentLSTMCell(input_size, hidden_size)
         self.hidden_size = hidden_size
 
-    def forward(self, sequence, mask):
+    def forward(
+        self, sequence: torch.Tensor, mask: torch.Tensor
+    ) -> T.Tuple[torch.Tensor, torch.Tensor]:
         """Encode the sequence using an LSTM cell.
         Args:
             sequence: (n_batch, n_agents, n_timesteps, _)
@@ -109,7 +116,7 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, hidden_size, n_timesteps, config):
+    def __init__(self, hidden_size: int, n_timesteps: int, config: DictConfig):
         super(Decoder, self).__init__()
         self.lstm_cell = MultiAgentLSTMCell(128, hidden_size)
         self.linear = nn.Linear(hidden_size, config.decoder.output_size)
@@ -152,11 +159,11 @@ class Decoder(nn.Module):
 
     def forward(
         self,
-        current_features,
-        current_availabilities,
-        context_embeddings,
-        context_avails,
-    ):
+        current_features: torch.Tensor,
+        current_availabilities: torch.Tensor,
+        context_embeddings: torch.Tensor,
+        context_avails: torch.Tensor,
+    ) -> torch.Tensor:
         """Forward pass of the decoder. when we are using agent centric representation we are only
         decoding a single agent, therefore n_agents is 1.
 
@@ -199,10 +206,10 @@ class PredictionModel(nn.Module):
 
     def __init__(
         self,
-        input_features,
-        hidden_size,
-        n_timesteps,
-        model_config,
+        input_features: int,
+        hidden_size: int,
+        n_timesteps: int,
+        model_config: DictConfig,
     ):
         super(PredictionModel, self).__init__()
         self.hidden_size = hidden_size
@@ -219,16 +226,12 @@ class PredictionModel(nn.Module):
 
         self.use_tl_encoder = model_config.tl_encoder.use_tl_encoder
 
-        self.tl_encoder = (
-            PointNetPolylineEncoder(
-                model_config.tl_encoder.input_size,
-                64,
-                num_layers=5,
-                num_pre_layers=3,
-                out_channels=hidden_size,
-            )
-            if self.use_tl_encoder
-            else None
+        self.tl_encoder = PointNetPolylineEncoder(
+            model_config.tl_encoder.input_size,
+            64,
+            num_layers=5,
+            num_pre_layers=3,
+            out_channels=hidden_size,
         )
 
         self.global_attention = SelfAttentionBlock(
@@ -237,18 +240,18 @@ class PredictionModel(nn.Module):
 
     def forward(
         self,
-        history_states,
-        history_availabilities,
-        actor_types,
-        roadgraph_features,
-        roadgraph_features_mask,
-        roadgraph_types,
-        tl_states,
-        tl_states_categorical,
-        tl_avails,
-        tracks_to_predict,
-        agent_to_predict,
-    ):
+        history_states: torch.Tensor,
+        history_availabilities: torch.Tensor,
+        actor_types: torch.Tensor,
+        roadgraph_features: torch.Tensor,
+        roadgraph_features_mask: torch.Tensor,
+        roadgraph_types: torch.Tensor,
+        tl_states: torch.Tensor,
+        tl_states_categorical: torch.Tensor,
+        tl_avails: torch.Tensor,
+        tracks_to_predict: torch.Tensor,
+        agent_to_predict: torch.Tensor,
+    ) -> torch.Tensor:
         # map_feats.shape is (batch, polyline, points, features)
         map_feats = roadgraph_features
         map_types = roadgraph_types
@@ -264,18 +267,12 @@ class PredictionModel(nn.Module):
         hidden_actor = self.actor_encoder(history_features, history_availabilities)
         hidden_map = self.map_encoder(map_feats, map_avails)  # [N_BATCH, N_POLYLINES]
 
-        if self.use_tl_encoder:
-            tl_persistent_avails = torch.any(tl_avails, dim=2)
-            hidden_tl = self.tl_encoder(
-                tl_feats, tl_avails
-            )  # [N_BATCH, N_TRAFFIC_LIGHTS]
-            global_features = torch.cat([hidden_actor, hidden_map, hidden_tl], dim=1)
-            global_avails = torch.cat(
-                [actor_avails, polyline_avails, tl_persistent_avails], dim=1
-            )
-        else:
-            global_features = torch.cat([hidden_actor, hidden_map], dim=1)
-            global_avails = torch.cat([actor_avails, polyline_avails], dim=1)
+        tl_persistent_avails = torch.any(tl_avails, dim=2)
+        hidden_tl = self.tl_encoder(tl_feats, tl_avails)  # [N_BATCH, N_TRAFFIC_LIGHTS]
+        global_features = torch.cat([hidden_actor, hidden_map, hidden_tl], dim=1)
+        global_avails = torch.cat(
+            [actor_avails, polyline_avails, tl_persistent_avails], dim=1
+        )
 
         # Perform self attention on all the features before sending it to the cross attention mask
         global_features = self.global_attention(global_features, mask=~global_avails)

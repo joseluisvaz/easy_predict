@@ -47,7 +47,7 @@ def _append_to_h5_datasets(
         file[dataset_name][-data.shape[0] :] = data
 
 
-def main(data_dir: str, out: str):
+def main(data_dir: str, out: str) -> None:
     # Set train_with_tracks_to_predict to False to generate the data with the 128 full agent data
     dataset = WaymoH5Dataset(data_dir, train_with_tracks_to_predict=False)
     dataloader = DataLoader(

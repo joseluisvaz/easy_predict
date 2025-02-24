@@ -1,10 +1,10 @@
 import pathlib
+import pickle
 import typing as T
 from argparse import ArgumentParser, Namespace
 
 import h5py
 import numpy as np
-import torch
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
@@ -43,7 +43,7 @@ class PickledDataset(Dataset):
 
         return _get_scenario_from_h5_file_using_idx(self.file, scenario_idx)
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self.file is not None:
             self.file.close()
 
@@ -69,8 +69,9 @@ def main(data_dir: str, out: str) -> None:
 
     for sample in tqdm(dataloader):
         scenario_id = sample["scenario_id"].item()
-        filepath = path / f"batch_{scenario_id}.pt"
-        torch.save(sample, str(filepath))
+        filepath = path / f"batch_{scenario_id}.pkl"
+        with open(filepath, "wb") as f:
+            pickle.dump(sample, f)
 
         for agent_id in range(MAX_AGENTS_TO_PREDICT):
             if not sample["tracks_to_predict"][agent_id]:
@@ -78,7 +79,11 @@ def main(data_dir: str, out: str) -> None:
             coupled_indices.append(np.array([scenario_id, agent_id]))
 
     coupled_indices = np.stack(coupled_indices, axis=0).astype(np.int64)
-    torch.save(coupled_indices, path / "coupled_indices.pt")
+    coupled_indices_path = path / "coupled_indices.pkl"
+    with open(coupled_indices_path, "wb") as f:
+        pickle.dump(coupled_indices, f)
+
+    print(f"Pickle file size: {coupled_indices_path.stat().st_size} bytes")
 
 
 if __name__ == "__main__":

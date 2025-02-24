@@ -46,7 +46,9 @@ class OnTrainCallback(L.Callback):
     #         ),
     #     )
 
-    def on_validation_epoch_end(self, trainer, pl_module):
+    def on_validation_epoch_end(
+        self, trainer: L.Trainer, pl_module: L.LightningModule
+    ) -> None:
         for idx, single_sample_batch in enumerate(
             itertools.islice(self.dataloader, 10, 10 + self.n_samples)
         ):
@@ -81,7 +83,7 @@ class OnTrainCallback(L.Callback):
         predicted_positions: torch.Tensor,
         current_epoch: int,
         scene_idx: int,
-    ):
+    ) -> None:
         """Creates the image of a single scenario and logs it to ClearML.
         Assumption: Each component of the scenario has the batch dimension of size 1
         """

@@ -1,9 +1,9 @@
 import pathlib
+import pickle
 import typing as T
 
 import h5py
 import numpy as np
-import torch
 from torch.utils.data import Dataset
 
 from common_utils.tensor_utils import force_pad_batch_size
@@ -47,7 +47,9 @@ def _generate_agent_features(
      (features, availabilities) [Tensor, Tensor]
     """
 
-    def compute_speed_from_position_diffs(velocities: np.ndarray, yaws: np.ndarray):
+    def compute_speed_from_position_diffs(
+        velocities: np.ndarray, yaws: np.ndarray
+    ) -> np.ndarray:
         """To compute velocities do integration with the previous timestep.
         s(t+1) = s(t) + v(t) * dt
         v(t) = (s(t+1) - s(t)) / dt
@@ -216,7 +218,7 @@ class ProcessedDataset(Dataset):
         # agent_batch = _generate_agent_centric_samples(sample)
         return sample
 
-    def __del__(self):
+    def __del__(self) -> None:
         if self.file is not None:
             self.file.close()
 
@@ -227,14 +229,17 @@ class ScenarioDataset(Dataset):
         filepath: str,
     ):
         self.datadir = pathlib.Path(filepath)
-        self.files = list(self.datadir.glob("scenario*.pt"))
-        self.coupled_indices = torch.load(self.datadir / "coupled_indices.pt")
+        self.files = list(self.datadir.glob("batch_*.pkl"))
+        with open(self.datadir / "coupled_indices.pkl", "rb") as f:
+            self.coupled_indices = pickle.load(f)
 
     def __len__(self) -> int:
         return len(self.files)
 
-    def __getitem__(self, scenario_idx: int) -> T.Dict[str, np.ndarray]:
-        sample = torch.load(self.datadir / f"batch_{scenario_idx}.pt")
+    def __getitem__(self, scenario_idx: int) -> T.List[T.Dict[str, np.ndarray]]:
+        with open(self.datadir / f"batch_{scenario_idx}.pkl", "rb") as f:
+            sample = pickle.load(f)
+
         agent_indices = self.coupled_indices[
             self.coupled_indices[:, 0] == scenario_idx
         ][:, 1]
@@ -265,7 +270,8 @@ class AgentCentricDataset(Dataset):
     ):
         # Get all .pt files in the directory
         self.datadir = pathlib.Path(filepath)
-        self.coupled_indices = torch.load(self.datadir / "coupled_indices.pt")
+        with open(self.datadir / "coupled_indices.pkl", "rb") as f:
+            self.coupled_indices = pickle.load(f)
 
     def __len__(self) -> int:
         return len(self.coupled_indices)
@@ -273,7 +279,9 @@ class AgentCentricDataset(Dataset):
     def __getitem__(self, idx: int) -> T.Dict[str, np.ndarray]:
         scenario_idx, agent_idx = self.coupled_indices[idx]
 
-        sample = torch.load(self.datadir / f"batch_{scenario_idx}.pt")
+        with open(self.datadir / f"batch_{scenario_idx}.pkl", "rb") as f:
+            sample = pickle.load(f)
+
         sample = _get_scenario_from_h5_file(sample)
         sample = move_frame_to_agent_of_idx(agent_idx, sample)
 

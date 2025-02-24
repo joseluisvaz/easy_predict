@@ -1,8 +1,8 @@
-import torch
 import math
-from torch import nn, Tensor
-
 import typing as T
+
+import torch
+from torch import Tensor, nn
 
 
 class NewGELU(nn.Module):
@@ -11,7 +11,7 @@ class NewGELU(nn.Module):
     Reference: Gaussian Error Linear Units (GELU) paper: https://arxiv.org/abs/1606.08415
     """
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         return (
             0.5
             * x
@@ -31,18 +31,12 @@ class SelfAttentionBlock(nn.Module):
             embed_dim, num_heads, dropout_p, batch_first=True
         )
 
-        self.mlp = nn.ModuleDict(
-            dict(
-                c_upproj=nn.Linear(embed_dim, 4 * embed_dim),
-                c_downproj=nn.Linear(4 * embed_dim, embed_dim),
-                act=NewGELU(),
-                dropout=nn.Dropout(dropout_p),
-            )
+        self.mlp_block = nn.Sequential(
+            nn.Linear(embed_dim, 4 * embed_dim),  # Up projection
+            NewGELU(),
+            nn.Linear(4 * embed_dim, embed_dim),  # Down projection
+            nn.Dropout(dropout_p),
         )
-        m = self.mlp
-        self.mlpf = lambda x: m.dropout(
-            m.c_downproj(m.act(m.c_upproj(x)))
-        )  # MLP forward
 
     def forward(
         self, x: Tensor, mask: Tensor, pos_embedding: T.Optional[Tensor] = None
@@ -54,7 +48,7 @@ class SelfAttentionBlock(nn.Module):
         q = k = x + pos_embedding if pos_embedding is not None else x
         attention, _ = self.mha(query=q, key=k, value=x, key_padding_mask=mask)
         x = x + attention
-        x = x + self.mlpf(x)
+        x = x + self.mlp_block(x)
         return x
 
 
@@ -65,18 +59,12 @@ class CrossAttentionBlock(nn.Module):
             embed_dim, num_heads, dropout_p, batch_first=True
         )
 
-        self.mlp = nn.ModuleDict(
-            dict(
-                c_upproj=nn.Linear(embed_dim, 4 * embed_dim),
-                c_downproj=nn.Linear(4 * embed_dim, embed_dim),
-                act=NewGELU(),
-                dropout=nn.Dropout(dropout_p),
-            )
+        self.mlp_block = nn.Sequential(
+            nn.Linear(embed_dim, 4 * embed_dim),  # Up projection
+            NewGELU(),
+            nn.Linear(4 * embed_dim, embed_dim),  # Down projection
+            nn.Dropout(dropout_p),
         )
-        m = self.mlp
-        self.mlpf = lambda x: m.dropout(
-            m.c_downproj(m.act(m.c_upproj(x)))
-        )  # MLP forward
 
     def forward(self, x: Tensor, cross_x: Tensor, cross_mask: Tensor) -> Tensor:
         """Interaction block for cross attention
@@ -88,5 +76,5 @@ class CrossAttentionBlock(nn.Module):
             query=x, key=cross_x, value=cross_x, key_padding_mask=cross_mask
         )
         x = x + attention
-        x = x + self.mlpf(x)
+        x = x + self.mlp_block(x)
         return x
