@@ -31,3 +31,11 @@ For training the model we first modify the `config/hyperparameters.yaml` file to
 ```bash
 uv run train.py --gpu --fast-dev-run
 ```
+
+## TODOs
+
+- [ ] Add a script to convert the waymo tfrecord files directly to pickle files.
+- [ ] Make a script to run the linter, formatter and tests with a single command.
+- [ ] Make running clearml optional and update documentation accordingly.
+- [ ] Start unit testing the repository
+- [ ] Implement multiple hypothesis prediction.
