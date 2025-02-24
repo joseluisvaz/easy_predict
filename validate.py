@@ -7,18 +7,18 @@ from metrics_callback import OnTrainCallback
 from prediction_module import PredictionLightningModule
 
 
-def main(use_gpu: bool, ckpt_path: str):
-
+def main(use_gpu: bool, ckpt_path: str) -> None:
     hyperparameters = OmegaConf.load("configs/hyperparameters.yaml")
 
     module = (
-        PredictionLightningModule(False, hyperparameters, clearml_task=None, cosine_t_max=100)
+        PredictionLightningModule(
+            fast_dev_run=False, hyperparameters=hyperparameters, clearml_task=None
+        )
         if not ckpt_path
         else PredictionLightningModule.load_from_checkpoint(
             ckpt_path,
             fast_dev_run=False,
             hyperparameters=hyperparameters,
-            cosine_t_max=100,
             clearml_task=None,
             map_location="cpu",
             limit_val_batches=0.1,

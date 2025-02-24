@@ -2,7 +2,6 @@ import typing as T
 
 import lightning as L
 import torch
-import torch.nn.functional as F
 from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
@@ -70,7 +69,9 @@ class PredictionLightningModule(L.LightningModule):
         # self.model = torch.compile(self.model)
         self.metrics = MotionMetrics(_default_metrics_config())
 
-    def _inference_and_loss(self, batch):
+    def _inference_and_loss(
+        self, batch: T.Dict[str, torch.Tensor]
+    ) -> T.Tuple[torch.Tensor, float]:
         predicted_features = run_model_forward_pass(self.model, batch)
         predicted_positions = predicted_features[..., :2]
 
@@ -100,25 +101,31 @@ class PredictionLightningModule(L.LightningModule):
         )
         return predicted_positions, loss
 
-    def training_step(self, batch, batch_idx):
+    def training_step(
+        self, batch: T.Dict[str, torch.Tensor], batch_idx: int
+    ) -> torch.Tensor:
         _, loss = self._inference_and_loss(batch)
         self.log("lr", self.optimizers().param_groups[0]["lr"])
         self.log("loss/train", loss)
         return loss
 
-    def validation_step(self, batch, batch_idx):
+    def validation_step(self, batch: T.Dict[str, torch.Tensor], batch_idx: int) -> None:
         with torch.no_grad():
             predicted_positions, loss = self._inference_and_loss(batch)
             self.metrics.update_state(batch, predicted_positions)
             self.log("loss/val", loss)
 
-    def configure_optimizers(self):
+    def configure_optimizers(self) -> T.Dict[str, T.Any]:
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.hp.learning_rate, weight_decay=self.hp.weight_decay
+            self.parameters(),
+            lr=self.hp.learning_rate,
+            weight_decay=self.hp.weight_decay,
         )
 
         cosine_t_max = self.hp.max_epochs * len(self.train_dataloader())
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_t_max)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cosine_t_max
+        )
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
@@ -129,7 +136,7 @@ class PredictionLightningModule(L.LightningModule):
             },
         }
 
-    def train_dataloader(self):
+    def train_dataloader(self) -> DataLoader:
         dataset = AgentCentricDataset(self.hp.train_dataset)
         return DataLoader(
             dataset,
@@ -143,7 +150,7 @@ class PredictionLightningModule(L.LightningModule):
             collate_fn=collate_waymo_stack,
         )
 
-    def val_dataloader(self):
+    def val_dataloader(self) -> DataLoader:
         dataset = ScenarioDataset(self.hp.val_dataset)
         return DataLoader(
             dataset,

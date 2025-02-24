@@ -20,7 +20,10 @@ class MultiAgentLSTMCell(nn.Module):
         return h, c
 
     def forward(
-        self, _input: Tensor, hidden: Tuple[Tensor, Tensor], mask: Optional[Tensor] = None
+        self,
+        _input: Tensor,
+        hidden: Tuple[Tensor, Tensor],
+        mask: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Tensor]:
         n_batch, n_agents, _ = _input.shape
 

@@ -1,9 +1,31 @@
-[tool.isort]
-multi_line_output = 3
-include_trailing_comma = true
-force_grid_wrap = 0
-line_length = 120
-profile = "black"
+[project]
+name = "easy-predict"
+version = "0.1.0"
+description = "Simple repository to train prediction models using WOMD dataset."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "clearml>=1.17.1",
+    "lightning==2.3.3",
+    "matplotlib>=3.7.5",
+    "numpy==1.23.2",
+    "omegaconf>=2.3.0",
+    "pandas==1.5.3",
+    "tensorflow==2.12",
+    "torch==2.4.1",
+    "transforms3d>=0.4.2",
+]
 
-[tool.black]
-line-length = 120
+[dependency-groups]
+dev = [
+    "mypy>=1.14.1",
+    "ruff>=0.9.7",
+]
+
+[tool.mypy]
+ignore_missing_imports = true
+disallow_incomplete_defs = true     # Disallow functions with partial type annotations
+disallow_untyped_defs = true        # Functions must have type annotations
+check_untyped_defs = true           # Check the interior of functions without type annotations
+disallow_untyped_decorators = true  # Decorators must be typed
+disallow_untyped_calls = true       # Disallow calling functions without type annotations

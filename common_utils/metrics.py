@@ -2,7 +2,6 @@ from google.protobuf import text_format
 import typing as T
 
 from common_utils.agent_centric_to_scenario import (
-    batch_scenarios_by_feature,
     group_batch_by_scenario,
 )
 from waymo_open_dataset.metrics.ops import py_metrics_ops
@@ -14,7 +13,7 @@ import torch
 from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
 
 
-def _default_metrics_config():
+def _default_metrics_config() -> motion_metrics_pb2.MotionMetricsConfig:
     config = motion_metrics_pb2.MotionMetricsConfig()
     config_text = """
         track_steps_per_second: 5
@@ -49,19 +48,19 @@ def _default_metrics_config():
 class MotionMetrics(tf.keras.metrics.Metric):
     """Wrapper for motion metrics computation."""
 
-    def __init__(self, config):
+    def __init__(self, config: motion_metrics_pb2.MotionMetricsConfig):
         super().__init__()
-        self._prediction_trajectory = []
-        self._prediction_score = []
-        self._ground_truth_trajectory = []
-        self._ground_truth_is_valid = []
-        self._prediction_ground_truth_indices = []
-        self._prediction_ground_truth_indices_mask = []
-        self._object_type = []
+        self._prediction_trajectory: T.List[tf.Tensor] = []
+        self._prediction_score: T.List[tf.Tensor] = []
+        self._ground_truth_trajectory: T.List[tf.Tensor] = []
+        self._ground_truth_is_valid: T.List[tf.Tensor] = []
+        self._prediction_ground_truth_indices: T.List[tf.Tensor] = []
+        self._prediction_ground_truth_indices_mask: T.List[tf.Tensor] = []
+        self._object_type: T.List[tf.Tensor] = []
         self._metrics_config = config
         self.metric_names = config_util.get_breakdown_names_from_motion_config(config)
 
-    def reset_state(self):
+    def reset_state(self) -> None:
         self._prediction_trajectory = []
         self._prediction_score = []
         self._ground_truth_trajectory = []
@@ -87,7 +86,9 @@ class MotionMetrics(tf.keras.metrics.Metric):
         self._prediction_score.append(to_tf(prediction_score))
         self._ground_truth_trajectory.append(to_tf(ground_truth_trajectory))
         self._ground_truth_is_valid.append(to_tf(ground_truth_is_valid))
-        self._prediction_ground_truth_indices.append(to_tf(prediction_ground_truth_indices))
+        self._prediction_ground_truth_indices.append(
+            to_tf(prediction_ground_truth_indices)
+        )
         self._prediction_ground_truth_indices_mask.append(
             to_tf(prediction_ground_truth_indices_mask)
         )
@@ -95,16 +96,22 @@ class MotionMetrics(tf.keras.metrics.Metric):
 
     def update_state(
         self, batch: T.Dict[str, torch.Tensor], full_predicted_positions: torch.Tensor
-    ):
+    ) -> None:
         batched_scenarios = group_batch_by_scenario(batch, full_predicted_positions)
 
         # Chop all the tensors to match the number of predicted agents the tracks to predict mask
         # will take care of just computing the metrics for the relevant agents
-        predicted_positions = batched_scenarios["predicted_positions"][:, :MAX_AGENTS_TO_PREDICT]
-        gt_states_avails = batched_scenarios["gt_states_avails"][:, :MAX_AGENTS_TO_PREDICT]
+        predicted_positions = batched_scenarios["predicted_positions"][
+            :, :MAX_AGENTS_TO_PREDICT
+        ]
+        gt_states_avails = batched_scenarios["gt_states_avails"][
+            :, :MAX_AGENTS_TO_PREDICT
+        ]
         gt_states = batched_scenarios["gt_states"][:, :MAX_AGENTS_TO_PREDICT]
         actor_type = batched_scenarios["actor_type"][:, :MAX_AGENTS_TO_PREDICT]
-        tracks_to_predict_mask = batched_scenarios["tracks_to_predict"][:, :MAX_AGENTS_TO_PREDICT]
+        tracks_to_predict_mask = batched_scenarios["tracks_to_predict"][
+            :, :MAX_AGENTS_TO_PREDICT
+        ]
 
         batch_size, num_agents, _, _ = predicted_positions.shape
         # [batch_size, num_agents, steps, 2] -> # [batch_size, 1, 1, num_agents, steps, 2].
@@ -115,7 +122,9 @@ class MotionMetrics(tf.keras.metrics.Metric):
         pred_score = torch.ones((batch_size, 1, 1))
         # [batch_size, num_pred, num_agents].
         pred_gt_indices = torch.arange(num_agents, dtype=torch.int64)
-        pred_gt_indices = pred_gt_indices[None, None, :].expand(batch_size, 1, num_agents)
+        pred_gt_indices = pred_gt_indices[None, None, :].expand(
+            batch_size, 1, num_agents
+        )
         # For the tracks to predict use the current timestamps
         pred_gt_indices_mask = tracks_to_predict_mask
         pred_gt_indices_mask = pred_gt_indices_mask.unsqueeze(1)
@@ -130,7 +139,7 @@ class MotionMetrics(tf.keras.metrics.Metric):
             object_type=actor_type,
         )
 
-    def result(self):
+    def result(self) -> T.Dict[str, float]:
         # [batch_size, num_preds, top_k, num_agents, steps, 2].
         prediction_trajectory = tf.concat(self._prediction_trajectory, 0)
         # [batch_size, num_preds, top_k].
@@ -140,7 +149,9 @@ class MotionMetrics(tf.keras.metrics.Metric):
         # [batch_size, num_agents, gt_steps].
         ground_truth_is_valid = tf.concat(self._ground_truth_is_valid, 0)
         # [batch_size, num_preds, num_agents].
-        prediction_ground_truth_indices = tf.concat(self._prediction_ground_truth_indices, 0)
+        prediction_ground_truth_indices = tf.concat(
+            self._prediction_ground_truth_indices, 0
+        )
         # [batch_size, num_preds, num_agents].
         prediction_ground_truth_indices_mask = tf.concat(
             self._prediction_ground_truth_indices_mask, 0
@@ -153,7 +164,9 @@ class MotionMetrics(tf.keras.metrics.Metric):
             self._metrics_config.track_steps_per_second
             // self._metrics_config.prediction_steps_per_second
         )
-        prediction_trajectory = prediction_trajectory[..., (interval - 1) :: interval, :]
+        prediction_trajectory = prediction_trajectory[
+            ..., (interval - 1) :: interval, :
+        ]
 
         return py_metrics_ops.motion_metrics(
             config=self._metrics_config.SerializeToString(),

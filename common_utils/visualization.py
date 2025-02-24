@@ -65,7 +65,9 @@ def plot_oriented_box(
 
 
 def _plot_predicted_trajectories(
-    predicted_positions: torch.Tensor, single_sample: T.Dict[str, torch.Tensor], anchor_index: int
+    predicted_positions: torch.Tensor,
+    single_sample: T.Dict[str, torch.Tensor],
+    anchor_index: int,
 ) -> None:
     """Plot predicted trajectories for each batch with a yellow-to-orange color gradient.
 
@@ -81,7 +83,9 @@ def _plot_predicted_trajectories(
     for batch_idx in range(predicted_positions.shape[0]):
         # Get current state of anchor agent
         current_state = (
-            single_sample["gt_states"][batch_idx, anchor_index, NUM_HISTORY_FRAMES, :].cpu().numpy()
+            single_sample["gt_states"][batch_idx, anchor_index, NUM_HISTORY_FRAMES, :]
+            .cpu()
+            .numpy()
         )
         current_yaw = current_state[4]
 
@@ -98,7 +102,12 @@ def _plot_predicted_trajectories(
     # Plot each predicted trajectory
     for sequence in predicted_sequences:
         plt.scatter(
-            sequence[:, 0], sequence[:, 1], color=prediction_colors, s=7.0, alpha=0.7, zorder=2
+            sequence[:, 0],
+            sequence[:, 1],
+            color=prediction_colors,
+            s=7.0,
+            alpha=0.7,
+            zorder=2,
         )
 
 
@@ -115,26 +124,35 @@ class AgentTrajectories:
 def _process_agent_trajectories(
     single_sample: T.Dict[str, torch.Tensor], anchor_index: int
 ) -> AgentTrajectories:
-
     # Crop the future positions to match the number of timesteps
     target_positions = (
-        single_sample["gt_states"][anchor_index, :, -NUM_FUTURE_FRAMES:, :2].cpu().numpy()
+        single_sample["gt_states"][anchor_index, :, -NUM_FUTURE_FRAMES:, :2]
+        .cpu()
+        .numpy()
     )
     target_availabilities = (
-        single_sample["gt_states_avails"][anchor_index, :, -NUM_FUTURE_FRAMES:].cpu().numpy()
+        single_sample["gt_states_avails"][anchor_index, :, -NUM_FUTURE_FRAMES:]
+        .cpu()
+        .numpy()
     )
     history_states = (
-        single_sample["gt_states"][anchor_index, :, : NUM_HISTORY_FRAMES + 1].cpu().numpy()
+        single_sample["gt_states"][anchor_index, :, : NUM_HISTORY_FRAMES + 1]
+        .cpu()
+        .numpy()
     )
     history_availabilities = (
-        single_sample["gt_states_avails"][anchor_index, :, : NUM_HISTORY_FRAMES + 1].cpu().numpy()
+        single_sample["gt_states_avails"][anchor_index, :, : NUM_HISTORY_FRAMES + 1]
+        .cpu()
+        .numpy()
     )
     tracks_to_predict = single_sample["tracks_to_predict"][anchor_index].cpu().numpy()
 
     n_agents = history_states.shape[0]
     current_states = history_states[:, -1, :]
     current_availabilities = history_availabilities[:, -1]
-    valid_current_states = [current_states[i] for i in range(n_agents) if current_availabilities[i]]
+    valid_current_states = [
+        current_states[i] for i in range(n_agents) if current_availabilities[i]
+    ]
 
     history_sequences = []
     ground_truth_sequences = []
@@ -142,7 +160,9 @@ def _process_agent_trajectories(
     for agent_idx in range(MAX_AGENTS_TO_PREDICT):
         if tracks_to_predict[agent_idx] == 0:
             continue
-        history_sequences.append(history_states[agent_idx, history_availabilities[agent_idx], :2])
+        history_sequences.append(
+            history_states[agent_idx, history_availabilities[agent_idx], :2]
+        )
         ground_truth_sequences.append(
             target_positions[agent_idx, target_availabilities[agent_idx], :2]
         )
@@ -154,13 +174,19 @@ def _process_agent_trajectories(
     )
 
 
-def _plot_agent_trajectories(single_sample: T.Dict[str, torch.Tensor], anchor_index: int) -> None:
+def _plot_agent_trajectories(
+    single_sample: T.Dict[str, torch.Tensor], anchor_index: int
+) -> None:
     agent_trajectories = _process_agent_trajectories(single_sample, anchor_index)
 
     for sequence in agent_trajectories.history_sequences:
-        plt.scatter(sequence[:, 0], sequence[:, 1], color="gray", s=1.0, alpha=0.7, zorder=1)
+        plt.scatter(
+            sequence[:, 0], sequence[:, 1], color="gray", s=1.0, alpha=0.7, zorder=1
+        )
     for sequence in agent_trajectories.future_sequences:
-        plt.scatter(sequence[:, 0], sequence[:, 1], color="teal", s=2.0, alpha=0.7, zorder=1)
+        plt.scatter(
+            sequence[:, 0], sequence[:, 1], color="teal", s=2.0, alpha=0.7, zorder=1
+        )
 
     ax = plt.gca()
     for state in agent_trajectories.current_states:
@@ -216,15 +242,22 @@ def _process_map_features(
     )
 
 
-def _plot_map_features(single_sample: T.Dict[str, torch.Tensor], anchor_index: int) -> None:
+def _plot_map_features(
+    single_sample: T.Dict[str, torch.Tensor], anchor_index: int
+) -> None:
     processed_map_features = _process_map_features(single_sample, anchor_index)
 
     unique_polyline_ids = torch.unique(processed_map_features.ids)
     for polyline_id in unique_polyline_ids:
-
-        filtered_points = processed_map_features.points[processed_map_features.ids == polyline_id]
-        filtered_dirs = processed_map_features.dirs[processed_map_features.ids == polyline_id]
-        type_id = processed_map_features.types[processed_map_features.ids == polyline_id][0]
+        filtered_points = processed_map_features.points[
+            processed_map_features.ids == polyline_id
+        ]
+        filtered_dirs = processed_map_features.dirs[
+            processed_map_features.ids == polyline_id
+        ]
+        type_id = processed_map_features.types[
+            processed_map_features.ids == polyline_id
+        ][0]
         color = _ROADGRAPH_TYPE_TO_COLOR[_ROADGRAPH_IDX_TO_TYPE[type_id.item()]]
         if _ROADGRAPH_IDX_TO_TYPE[type_id.item()] == "StopSign":
             plt.scatter(
@@ -237,7 +270,11 @@ def _plot_map_features(single_sample: T.Dict[str, torch.Tensor], anchor_index: i
             )
         else:
             plt.plot(
-                filtered_points[:, 0], filtered_points[:, 1], color=color, linewidth=0.5, zorder=0
+                filtered_points[:, 0],
+                filtered_points[:, 1],
+                color=color,
+                linewidth=0.5,
+                zorder=0,
             )
         if "LaneCenter" in _ROADGRAPH_IDX_TO_TYPE[type_id.item()]:
             plt.quiver(
@@ -262,7 +299,6 @@ def plot_scene(
     predicted_positions: T.Optional[torch.Tensor] = None,
     zoom_out: bool = False,
 ) -> None:
-
     anchor_index = 0
 
     plt.figure()

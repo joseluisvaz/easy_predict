@@ -7,22 +7,26 @@ from typing import Any, Dict, Final, Generic, List, Optional, TypeVar
 import h5py
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
 
-from common_utils.geometry import get_so2_from_se2, get_transformation_matrix, get_yaw_from_se2, transform_points
+from common_utils.geometry import (
+    get_so2_from_se2,
+    get_transformation_matrix,
+    get_yaw_from_se2,
+    transform_points,
+)
 from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.feature_description import (
     _ROADGRAPH_TYPE_TO_IDX,
+    MAP_BOUNDS_PADDING_M,
+    MAP_MIN_NUM_OF_POINTS,
     NUM_HISTORY_FRAMES,
     ROADGRAPH_FEATURES,
     STATE_FEATURES,
     SUBSAMPLE_SEQUENCE,
     TRAFFIC_LIGHT_FEATURES,
-    MAP_MIN_NUM_OF_POINTS,
-    MAP_BOUNDS_PADDING_M,
 )
 
 ROADGRAPH_TYPES_OF_INTEREST: Final = {
@@ -90,14 +94,18 @@ class MultiAgentFeatures(Generic[Array]):
 
     def force_pad_batch_size(self, max_n_agents: int) -> None:
         self.gt_states = force_pad_batch_size(self.gt_states, max_n_agents)
-        self.gt_states_avails = force_pad_batch_size(self.gt_states_avails, max_n_agents)
+        self.gt_states_avails = force_pad_batch_size(
+            self.gt_states_avails, max_n_agents
+        )
         self.actor_type = force_pad_batch_size(self.actor_type, max_n_agents)
         self.is_sdc = force_pad_batch_size(self.is_sdc, max_n_agents)
-        self.tracks_to_predict = force_pad_batch_size(self.tracks_to_predict, max_n_agents)
+        self.tracks_to_predict = force_pad_batch_size(
+            self.tracks_to_predict, max_n_agents
+        )
 
     def transform_with_se3(self, transform: Array) -> None:
-        rotation = get_so2_from_se2(transform)  # type: ignore
-        relative_yaw = get_yaw_from_se2(transform)  # type: ignore
+        rotation = get_so2_from_se2(transform)
+        relative_yaw = get_yaw_from_se2(transform)
 
         avails = self.gt_states_avails
 
@@ -109,10 +117,9 @@ class MultiAgentFeatures(Generic[Array]):
 
 
 class WaymoDatasetHelper(object):
-
     @staticmethod
     def generate_multi_agent_features(
-        decoded_example: Dict[str, np.ndarray]
+        decoded_example: Dict[str, np.ndarray],
     ) -> MultiAgentFeatures[np.ndarray]:
         # The order of the states is defined as in the WOMD metrics requirements for gt state ordering
         def get_states(temporal_suffix: str) -> np.ndarray:
@@ -168,7 +175,9 @@ def pad_or_trim_first_dimension(tensor: np.array, value: Any) -> np.ndarray:
     if tensor.shape[0] < MAX_NUM_POLYLINES:
         padding = MAX_NUM_POLYLINES - tensor.shape[0]
         padding_sequence = [(0, padding)] + [(0, 0)] * (ndim - 1)
-        padded_tensor = np.pad(tensor, padding_sequence, mode="constant", constant_values=value)
+        padded_tensor = np.pad(
+            tensor, padding_sequence, mode="constant", constant_values=value
+        )
         return padded_tensor
     warnings.warn("Trimming the tensor to the maximum number of polylines")
     return tensor[:MAX_NUM_POLYLINES]
@@ -219,7 +228,7 @@ def get_inside_bounds_mask(xy_positions: np.ndarray, bounds: np.ndarray) -> np.n
 
 def _filter_inside_relevant_area(
     map_positions: np.ndarray, agent_positions: np.ndarray
-) -> Dict[str, np.ndarray]:
+) -> np.ndarray:
     """Filter data inside relevant area, returns a mask"""
     # If the map is already small then just return a valid mask
     if len(map_positions) <= MAP_MIN_NUM_OF_POINTS:
@@ -238,17 +247,26 @@ def _filter_inside_relevant_area(
 
 
 def _parse_roadgraph_features(
-    decoded_example: Dict[str, np.ndarray], to_ego_se3: np.ndarray, valid_positions: np.ndarray
-) -> Dict[str, torch.Tensor]:
-
-    def _apply_validity_masks(points, dirs, valid, types, ids):
+    decoded_example: Dict[str, np.ndarray],
+    to_ego_se3: np.ndarray,
+    valid_positions: np.ndarray,
+) -> Dict[str, np.ndarray]:
+    def _apply_validity_masks(
+        points: np.ndarray,
+        dirs: np.ndarray,
+        valid: np.ndarray,
+        types: np.ndarray,
+        ids: np.ndarray,
+    ) -> T.Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Filter the roadgraph based on validity and type of the roadgraph element"""
         points = points[valid]  # [M, 2]
         dirs = dirs[valid]  # [M, 2]
         ids = ids[valid].astype(np.int32)  # [M,]
         types = types[valid]  # [M,]
 
-        idx_of_iterest = [_ROADGRAPH_TYPE_TO_IDX[type] for type in ROADGRAPH_TYPES_OF_INTEREST]
+        idx_of_iterest = [
+            _ROADGRAPH_TYPE_TO_IDX[type] for type in ROADGRAPH_TYPES_OF_INTEREST
+        ]
         mask_types = np.isin(types, list(idx_of_iterest))  # [M,]
         map_mask = _filter_inside_relevant_area(points, valid_positions)
         total_mask = mask_types & map_mask
@@ -261,7 +279,9 @@ def _parse_roadgraph_features(
 
     # get only the rotation component to transform the polyline directions
     rotation = get_so2_from_se2(to_ego_se3)
-    points = transform_points(decoded_example["roadgraph_samples/xyz"][:, :2], to_ego_se3)
+    points = transform_points(
+        decoded_example["roadgraph_samples/xyz"][:, :2], to_ego_se3
+    )
     dirs = transform_points(decoded_example["roadgraph_samples/dir"][:, :2], rotation)
     ids = decoded_example["roadgraph_samples/id"][:, 0]
     valid = decoded_example["roadgraph_samples/valid"][:, 0].astype(np.bool_)
@@ -272,7 +292,7 @@ def _parse_roadgraph_features(
     )
     unique_ids, _ = np.unique(valid_ids, return_counts=True)
 
-    def _subsample_sequence(sequence: np.ndarray, subsample: int):
+    def _subsample_sequence(sequence: np.ndarray, subsample: int) -> np.ndarray:
         if len(sequence) <= 3:
             return sequence
         indices = np.arange(1, len(sequence) - 1, subsample)
@@ -283,7 +303,9 @@ def _parse_roadgraph_features(
         _ROADGRAPH_TYPE_TO_IDX[_type] for _type in ROADGRAPH_TYPES_TO_SUBSAMPLE
     }
 
-    def _select_and_decompose_sequences(flattened_sequences: np.ndarray, types: np.ndarray):
+    def _select_and_decompose_sequences(
+        flattened_sequences: np.ndarray, types: np.ndarray
+    ) -> List[np.ndarray]:
         """Select the unique ids and decompose the polylines into smaller pieces"""
         decomposed = []
         for id in unique_ids:
@@ -293,12 +315,14 @@ def _parse_roadgraph_features(
                 SUBSAMPLE_POLYLINE if polyline_type in ROADGRAPH_IDX_TO_SUBSAMPLE else 1
             )
 
-            subsequence = _subsample_sequence(flattened_sequences[indices], subsample_factor)
+            subsequence = _subsample_sequence(
+                flattened_sequences[indices], subsample_factor
+            )
             for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
                 decomposed.append(subsequence[i : i + MAX_POLYLINE_LENGTH])
         return decomposed
 
-    def _resample_ids(flattened_ids: np.ndarray, types: np.ndarray):
+    def _resample_ids(flattened_ids: np.ndarray, types: np.ndarray) -> np.ndarray:
         """Similar to the previous function but has a counter to populate the new ids"""
         decomposed = []
         id_counter = 1
@@ -313,7 +337,9 @@ def _parse_roadgraph_features(
             for i in range(0, len(subsequence), MAX_POLYLINE_LENGTH):
                 decomposed.append(
                     id_counter
-                    * np.ones_like(subsequence[i : i + MAX_POLYLINE_LENGTH]).astype(np.int16)
+                    * np.ones_like(subsequence[i : i + MAX_POLYLINE_LENGTH]).astype(
+                        np.int16
+                    )
                 )
                 id_counter += 1
         return decomposed
@@ -334,7 +360,9 @@ def _parse_roadgraph_features(
         tensor_sequence.append(dummy_tensor)
 
         nested_tensor = torch.nested.nested_tensor(tensor_sequence, dtype=torch_type)
-        padded_tensor = torch.nested.to_padded_tensor(nested_tensor, padding=padding).numpy()
+        padded_tensor = torch.nested.to_padded_tensor(
+            nested_tensor, padding=padding
+        ).numpy()
 
         # Remove the dummy tensor
         return padded_tensor[:-1]
@@ -432,26 +460,33 @@ def _generate_features(
     agent_features.transform_with_se3(to_agent_se3)
 
     valid_positions = agent_features.gt_states[agent_features.gt_states_avails][:, :2]
-    map_features = _parse_roadgraph_features(decoded_example, to_agent_se3, valid_positions)
+    map_features = _parse_roadgraph_features(
+        decoded_example, to_agent_se3, valid_positions
+    )
     tl_features = _parse_traffic_light_features(decoded_example, to_agent_se3)
 
     if train_with_tracks_to_predict:
         MAX_PREDICATABLE_AGENTS: Final = 9  # 8 + ego
         agent_features.force_pad_batch_size(MAX_PREDICATABLE_AGENTS)
-        
-    current_avails = agent_features.gt_states_avails[:, NUM_HISTORY_FRAMES].astype(np.bool_)
+
+    current_avails = agent_features.gt_states_avails[:, NUM_HISTORY_FRAMES].astype(
+        np.bool_
+    )
     tracks_to_predict = agent_features.tracks_to_predict.astype(np.bool_)
     assert np.all(current_avails[tracks_to_predict])
-    
 
     return {
         "gt_states": agent_features.gt_states.astype(
             np.float32
         ),  # [N_AGENTS, TIME, FEATS=7] (x, y, length, width, yaw, velocity_x, velocity_y)
-        "gt_states_avails": agent_features.gt_states_avails.astype(np.bool_),  # [N_AGENTS, TIME]
+        "gt_states_avails": agent_features.gt_states_avails.astype(
+            np.bool_
+        ),  # [N_AGENTS, TIME]
         "actor_type": agent_features.actor_type.astype(np.int64),  # [N_AGENTS,]
         "is_sdc": agent_features.is_sdc.astype(np.bool_),  # [N_AGENTS,]
-        "tracks_to_predict": agent_features.tracks_to_predict.astype(np.bool_),  # [N_AGENTS,]
+        "tracks_to_predict": agent_features.tracks_to_predict.astype(
+            np.bool_
+        ),  # [N_AGENTS,]
         "roadgraph_features": map_features["roadgraph_features"].astype(
             np.float32
         ),  # [N_POLYLINE, N_POINTS, FEATS=4] (x, y, dx, dy)
@@ -464,11 +499,15 @@ def _generate_features(
         "roadgraph_features_ids": map_features["roadgraph_features_ids"].astype(
             np.int16
         ),  # [N_POLYLINE,]
-        "tl_states": tl_features["tl_states"].astype(np.float32),  # [N_TRAFFIC_LIGHTS, TIME, 2]
+        "tl_states": tl_features["tl_states"].astype(
+            np.float32
+        ),  # [N_TRAFFIC_LIGHTS, TIME, 2]
         "tl_states_categorical": tl_features["tl_states_categorical"].astype(
             np.int64
         ),  # [N_TRAFFIC_LIGHTS, TIME]
-        "tl_avails": tl_features["tl_avails"].astype(np.bool_),  # [N_TRAFFIC_LIGHTS, TIME]
+        "tl_avails": tl_features["tl_avails"].astype(
+            np.bool_
+        ),  # [N_TRAFFIC_LIGHTS, TIME]
     }
 
 
@@ -478,22 +517,28 @@ def collate_waymo_concatenate(payloads: List[Any]) -> Dict[str, Tensor]:
         collated_batch[key] = np.concatenate([payload[key] for payload in payloads])
     return default_convert(collated_batch)
 
+
 def collate_waymo_stack(payloads: List[Any]) -> Dict[str, Tensor]:
     return default_convert(default_collate(payloads))
 
-def collate_waymo_scenario(payloads: T.List[T.List[T.Dict[str, np.ndarray]]]) -> Dict[str, Tensor]:
-    
+
+def collate_waymo_scenario(
+    payloads: T.List[T.List[T.Dict[str, np.ndarray]]],
+) -> Dict[str, Tensor]:
     # First collation will do stacking of the tensors
     collated_subbatches = []
     for subbatch in payloads:
         collated_subbatches.append(default_collate(subbatch))
-    
+
     # Second collation will do concatenation of the tensors
     collated_batch = {}
     for key in collated_subbatches[0]:
-        collated_batch[key] = torch.concatenate([subbatch[key] for subbatch in collated_subbatches])
-    
+        collated_batch[key] = torch.concatenate(
+            [subbatch[key] for subbatch in collated_subbatches]
+        )
+
     return default_convert(collated_batch)
+
 
 def parse_concatenated_tensor(
     concatenated_tensor: np.ndarray, feature_dict: OrderedDict, batch_first: bool = True
@@ -514,9 +559,9 @@ def parse_concatenated_tensor(
         feature_length = shape[1] if len(shape) > 1 else 1
 
         end_idx = start_idx + feature_length
-        parsed_features[feature_name] = concatenated_tensor[:, start_idx:end_idx].reshape(
-            agent_length, feature_length
-        )
+        parsed_features[feature_name] = concatenated_tensor[
+            :, start_idx:end_idx
+        ].reshape(agent_length, feature_length)
         start_idx = end_idx
 
     return parsed_features
@@ -543,21 +588,27 @@ class WaymoH5Dataset(Dataset):
             self.dataset = h5py.File(self.filepath, "r", libver="latest", swmr=True)
 
         actor_merged_features = np.array(self.dataset["actor_merged_features"][idx])
-        roadgraph_merged_features = np.array(self.dataset["roadgraph_merged_features"][idx])
+        roadgraph_merged_features = np.array(
+            self.dataset["roadgraph_merged_features"][idx]
+        )
         tl_merged_features = np.array(self.dataset["tl_merged_features"][idx])
 
         data_fetched = {}
-        data_fetched.update(parse_concatenated_tensor(actor_merged_features, STATE_FEATURES))
+        data_fetched.update(
+            parse_concatenated_tensor(actor_merged_features, STATE_FEATURES)
+        )
         data_fetched.update(
             parse_concatenated_tensor(roadgraph_merged_features, ROADGRAPH_FEATURES)
         )
         data_fetched.update(
-            parse_concatenated_tensor(tl_merged_features, TRAFFIC_LIGHT_FEATURES, batch_first=False)
+            parse_concatenated_tensor(
+                tl_merged_features, TRAFFIC_LIGHT_FEATURES, batch_first=False
+            )
         )
-        batch =  _generate_features(
+        batch = _generate_features(
             data_fetched, train_with_tracks_to_predict=self.train_with_tracks_to_predict
         )
-        
+
         # Attach the index of the scenario for quick reference
         batch["scenario_id"] = np.array(idx).astype(np.int64)
         return batch

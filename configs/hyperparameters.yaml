@@ -9,9 +9,9 @@ grad_norm_clip: 5.0
 eta_min: 1.0E-5
 
 # Data arguments
-train_dataset: data/processed/training.h5
-val_dataset: data/processed/validation.h5
-num_workers: 16
+train_dataset: data/files/training
+val_dataset: data/files/validation
+num_workers: 32
 
 data_perturb:
   anchor_frame:
@@ -30,7 +30,6 @@ model_config:
     max_yaw_rate: 1.0
     delta_t: 0.2
   tl_encoder:
-    use_tl_encoder: True 
     input_size: 11
     
 # Model arguments

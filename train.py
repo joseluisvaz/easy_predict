@@ -1,16 +1,7 @@
-import warnings
-
-# Ignore the warning about nested tensors to not spam the terminal
-warnings.filterwarnings(
-    "ignore",
-    message="The PyTorch API of nested tensors is in prototype stage and will change in the near future.",
-)
-
 import typing as T
 from argparse import ArgumentParser, Namespace
 
 import lightning as L
-import matplotlib.pyplot as plt
 import torch
 from clearml import Task
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -25,7 +16,12 @@ torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")
 
 
-def main(fast_dev_run: bool, use_gpu: bool, ckpt_path: T.Optional[str], task: T.Optional[Task]):
+def main(
+    fast_dev_run: bool,
+    use_gpu: bool,
+    ckpt_path: T.Optional[str],
+    task: T.Optional[Task],
+) -> None:
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA version: {torch.version.cuda}")
 
@@ -95,9 +91,11 @@ def _parse_arguments() -> Namespace:
 
 if __name__ == "__main__":
     args = _parse_arguments()
-    
+
     if not args.fast_dev_run:
-        task = Task.init(project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG")
+        task = Task.init(
+            project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG"
+        )
     else:
         task = None
     main(args.fast_dev_run, args.gpu, args.ckpt, task)

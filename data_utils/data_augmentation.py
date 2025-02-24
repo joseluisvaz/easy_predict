@@ -1,13 +1,13 @@
+import copy
 import typing as T
 from abc import ABC, abstractmethod
-import copy
 
 import numpy as np
 
 from common_utils.geometry import (
     get_so2_from_se2,
-    get_yaw_from_se2,
     get_transformation_matrix,
+    get_yaw_from_se2,
     transform_points,
 )
 
@@ -15,10 +15,12 @@ from common_utils.geometry import (
 from data_utils.feature_description import NUM_HISTORY_FRAMES
 
 
-def perturb_pose(perturbation_se2, batch: T.Dict[str, np.ndarray]):
+def perturb_pose(
+    perturbation_se2: np.ndarray, batch: T.Dict[str, np.ndarray]
+) -> T.Dict[str, np.ndarray]:
     """Perturb the pose of the agents in the batch"""
     perturbation_so2 = get_so2_from_se2(perturbation_se2)
-    relative_yaw = get_yaw_from_se2(perturbation_se2)  # type: ignore
+    relative_yaw = get_yaw_from_se2(perturbation_se2)
 
     # Modify geometrical properties for agent features
     avails = batch["gt_states_avails"]

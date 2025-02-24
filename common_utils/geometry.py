@@ -3,8 +3,11 @@ import transforms3d
 
 import numpy as np
 
-def get_transformation_matrix(agent_translation_m: np.ndarray, agent_yaw: np.ndarray) -> np.ndarray:
-    """ Get transformation matrix from world to vehicle frame"""
+
+def get_transformation_matrix(
+    agent_translation_m: np.ndarray, agent_yaw: np.ndarray
+) -> np.ndarray:
+    """Get transformation matrix from world to vehicle frame"""
 
     # Translate world to ego by applying the negative ego translation.
     world_to_agent_in_2d = np.eye(3, dtype=np.float32)
@@ -15,11 +18,14 @@ def get_transformation_matrix(agent_translation_m: np.ndarray, agent_yaw: np.nda
 
     return world_to_agent_in_2d
 
+
 def yaw_as_rotation33(yaw: float) -> np.ndarray:
     return transforms3d.euler.euler2mat(0, 0, yaw)
 
+
 def rotation33_as_yaw(rotation: np.ndarray) -> float:
     return cast(float, transforms3d.euler.mat2euler(rotation)[2])
+
 
 def transform_points(points: np.ndarray, transf_matrix: np.ndarray) -> np.ndarray:
     """Transform points using transformation matrix.
@@ -38,16 +44,21 @@ def transform_points(points: np.ndarray, transf_matrix: np.ndarray) -> np.ndarra
         f"dimensions mismatch, both points ({points.shape}) and "
         f"transf_matrix ({transf_matrix.shape}) needs to be 2D numpy ndarrays."
     )
-    assert (
-        transf_matrix.shape[0] == transf_matrix.shape[1]
-    ), f"transf_matrix ({transf_matrix.shape}) should be a square matrix."
+    assert transf_matrix.shape[0] == transf_matrix.shape[1], (
+        f"transf_matrix ({transf_matrix.shape}) should be a square matrix."
+    )
 
     if points.shape[1] not in [2, 3]:
-        raise AssertionError(f"Points input should be (N, 2) or (N, 3) shape, received {points.shape}")
+        raise AssertionError(
+            f"Points input should be (N, 2) or (N, 3) shape, received {points.shape}"
+        )
 
-    assert points.shape[1] == transf_matrix.shape[1] - 1, "points dim should be one less than matrix dim"
+    assert points.shape[1] == transf_matrix.shape[1] - 1, (
+        "points dim should be one less than matrix dim"
+    )
 
     return (points @ transf_matrix.T[:-1, :-1]) + transf_matrix[:-1, -1]
+
 
 def get_so2_from_se2(transform_se3: np.ndarray) -> np.ndarray:
     """Gets rotation component in SO(2) from transformation in SE(2).
