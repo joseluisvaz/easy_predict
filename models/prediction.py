@@ -224,8 +224,6 @@ class PredictionModel(nn.Module):
             24, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
         )
 
-        self.use_tl_encoder = model_config.tl_encoder.use_tl_encoder
-
         self.tl_encoder = PointNetPolylineEncoder(
             model_config.tl_encoder.input_size,
             64,
