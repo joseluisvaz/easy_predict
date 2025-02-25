@@ -4,7 +4,7 @@ import lightning as L
 from omegaconf import OmegaConf
 
 from models.pl_module import PredictionLightningModule
-from utils.metrics_callback import OnTrainCallback
+from utils.metrics_callback import ModelInspectionCallback
 
 
 def main(use_gpu: bool, ckpt_path: str) -> None:
@@ -30,7 +30,9 @@ def main(use_gpu: bool, ckpt_path: str) -> None:
         accelerator="gpu" if use_gpu else "cpu",
         devices=1,
         callbacks=[
-            OnTrainCallback(hyperparameters.val_dataset),
+            ModelInspectionCallback(
+                hyperparameters.viz_scenario_offset, hyperparameters.viz_num_scenarios
+            ),
         ],
     )
     trainer.validate(module)

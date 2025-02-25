@@ -9,8 +9,9 @@ from lightning.pytorch.tuner import Tuner
 from omegaconf import OmegaConf
 from pytorch_lightning.profilers import SimpleProfiler
 
+from data_utils.data_module import AgentCentricDataModule
 from models.pl_module import PredictionLightningModule
-from utils.metrics_callback import OnTrainCallback
+from utils.metrics_callback import ModelInspectionCallback
 
 torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")
@@ -30,6 +31,7 @@ def main(
     if task is not None:
         task.connect(hyperparameters)
 
+    datamodule = AgentCentricDataModule(hyperparameters.data_module, fast_dev_run)
     module = (
         PredictionLightningModule(fast_dev_run, hyperparameters, clearml_task=task)
         if not ckpt_path
@@ -41,7 +43,9 @@ def main(
     )
 
     callbacks = [
-        OnTrainCallback(hyperparameters.val_dataset),
+        ModelInspectionCallback(
+            hyperparameters.viz_scenario_offset, hyperparameters.viz_num_scenarios
+        ),
         ModelCheckpoint(
             dirpath="checkpoints/",
             filename="model-{epoch:02d}-{loss/val:.2f}",
@@ -77,7 +81,7 @@ def main(
         print("LEARNING RATE SUGGESTION: ", new_lr)
         assert False, "Terminate the program to avoid training"
 
-    trainer.fit(model=module, ckpt_path=ckpt_path)
+    trainer.fit(model=module, ckpt_path=ckpt_path, datamodule=datamodule)
 
 
 def _parse_arguments() -> Namespace:

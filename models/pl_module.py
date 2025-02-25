@@ -3,14 +3,11 @@ import typing as T
 import lightning as L
 import torch
 from omegaconf import DictConfig
-from torch.utils.data import DataLoader
 
 from data_utils.feature_description import (
     NUM_FUTURE_FRAMES,
     NUM_HISTORY_FRAMES,
 )
-from data_utils.feature_generation import collate_waymo_scenario, collate_waymo_stack
-from data_utils.processed_dataset import AgentCentricDataset, ScenarioDataset
 from models.inference import run_model_forward_pass
 from models.prediction import PredictionModel
 from utils.metrics import MotionMetrics, _default_metrics_config
@@ -125,7 +122,9 @@ class PredictionLightningModule(L.LightningModule):
             weight_decay=self.hp.weight_decay,
         )
 
-        cosine_t_max = self.hp.max_epochs * len(self.train_dataloader())
+        cosine_t_max = self.hp.max_epochs * len(
+            self.trainer.datamodule.train_dataloader()
+        )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=cosine_t_max
         )
@@ -138,31 +137,3 @@ class PredictionLightningModule(L.LightningModule):
                 "frequency": 1,
             },
         }
-
-    def train_dataloader(self) -> DataLoader:
-        dataset = AgentCentricDataset(self.hp.train_dataset)
-        return DataLoader(
-            dataset,
-            batch_size=self.hp.batch_size,
-            num_workers=self.hp.num_workers,
-            shuffle=True,
-            persistent_workers=True if not self.fast_dev_run else False,
-            pin_memory=False,
-            drop_last=True,
-            prefetch_factor=4 if not self.fast_dev_run else None,
-            collate_fn=collate_waymo_stack,
-        )
-
-    def val_dataloader(self) -> DataLoader:
-        dataset = ScenarioDataset(self.hp.val_dataset)
-        return DataLoader(
-            dataset,
-            batch_size=self.hp.val_batch_size,
-            num_workers=self.hp.num_workers,
-            shuffle=False,
-            persistent_workers=True if not self.fast_dev_run else False,
-            pin_memory=False,
-            drop_last=True,
-            prefetch_factor=4 if not self.fast_dev_run else None,
-            collate_fn=collate_waymo_scenario,
-        )
