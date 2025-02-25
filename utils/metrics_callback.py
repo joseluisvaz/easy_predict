@@ -8,10 +8,10 @@ from matplotlib import pyplot as plt
 from PIL import Image
 from torch.utils.data import DataLoader
 
-from common_utils.visualization import plot_scene
 from data_utils.feature_generation import collate_waymo_scenario
 from data_utils.processed_dataset import ScenarioDataset
 from models.inference import run_model_forward_pass
+from utils.visualization import plot_scene
 
 
 class OnTrainCallback(L.Callback):
@@ -27,24 +27,6 @@ class OnTrainCallback(L.Callback):
             shuffle=False,
             collate_fn=collate_waymo_scenario,
         )
-
-    # def on_train_start(self, trainer, pl_module):
-    #     batch = next(iter(self._dataloader))
-    #     batch = {k: v.cuda() for k, v in batch.items()}
-
-    #     history_states = batch["gt_features"][:, :, : NUM_HISTORY_FRAMES + 1]
-    #     history_avails = batch["gt_states_avails"][:, :, : NUM_HISTORY_FRAMES + 1]
-    #     summary(
-    #         pl_module.model,
-    #         input_data=(
-    #             history_states,
-    #             history_avails,
-    #             batch["actor_type"],
-    #             batch["roadgraph_features"],
-    #             batch["roadgraph_features_mask"],
-    #             batch["roadgraph_features_types"],
-    #         ),
-    #     )
 
     def on_validation_epoch_end(
         self, trainer: L.Trainer, pl_module: L.LightningModule

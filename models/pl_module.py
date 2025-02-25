@@ -11,9 +11,9 @@ from data_utils.feature_description import (
 )
 from data_utils.feature_generation import collate_waymo_scenario, collate_waymo_stack
 from data_utils.processed_dataset import AgentCentricDataset, ScenarioDataset
-from common_utils.metrics import MotionMetrics, _default_metrics_config
 from models.inference import run_model_forward_pass
 from models.prediction import PredictionModel
+from utils.metrics import MotionMetrics, _default_metrics_config
 
 
 def compute_loss(
@@ -55,6 +55,9 @@ class PredictionLightningModule(L.LightningModule):
         super().__init__()
         self.save_hyperparameters()
         self.hp = hyperparameters
+
+        # Needs to be a separate parameter so that the lr finder can modify it
+        self.learning_rate = hyperparameters.learning_rate
 
         self.task = clearml_task
         self.fast_dev_run = fast_dev_run
@@ -118,7 +121,7 @@ class PredictionLightningModule(L.LightningModule):
     def configure_optimizers(self) -> T.Dict[str, T.Any]:
         optimizer = torch.optim.AdamW(
             self.parameters(),
-            lr=self.hp.learning_rate,
+            lr=self.learning_rate,
             weight_decay=self.hp.weight_decay,
         )
 

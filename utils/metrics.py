@@ -1,16 +1,16 @@
-from google.protobuf import text_format
 import typing as T
 
-from common_utils.agent_centric_to_scenario import (
-    group_batch_by_scenario,
-)
+import tensorflow as tf
+import torch
+from google.protobuf import text_format
 from waymo_open_dataset.metrics.ops import py_metrics_ops
 from waymo_open_dataset.metrics.python import config_util_py as config_util
 from waymo_open_dataset.protos import motion_metrics_pb2
 
-import tensorflow as tf
-import torch
 from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
+from utils.agent_centric_to_scenario import (
+    group_batch_by_scenario,
+)
 
 
 def _default_metrics_config() -> motion_metrics_pb2.MotionMetricsConfig:

@@ -29,13 +29,13 @@ For using the data processing utilities and training the model we also use `uv`.
 For training the model we first modify the `config/hyperparameters.yaml` file to set the desired batch size, training and validation datasets, etc. and then use the following command to train the model:
 
 ```bash
-uv run train.py --gpu --fast-dev-run
+uv run -m scripts.train --gpu --fast-dev-run
 ```
 
 ## TODOs
 
 - [ ] Add a script to convert the waymo tfrecord files directly to pickle files.
-- [ ] Make a script to run the linter, formatter and tests with a single command.
+- [x] Make a script to run the linter, formatter and tests with a single command.
 - [ ] Make running clearml optional and update documentation accordingly.
-- [ ] Start unit testing the repository
+- [x] Start unit testing the repository
 - [ ] Implement multiple hypothesis prediction.

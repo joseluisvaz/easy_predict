@@ -11,13 +11,6 @@ from torch import Tensor
 from torch.utils.data import Dataset
 from torch.utils.data._utils.collate import default_collate, default_convert
 
-from common_utils.geometry import (
-    get_so2_from_se2,
-    get_transformation_matrix,
-    get_yaw_from_se2,
-    transform_points,
-)
-from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.feature_description import (
     _ROADGRAPH_TYPE_TO_IDX,
     MAP_BOUNDS_PADDING_M,
@@ -28,6 +21,13 @@ from data_utils.feature_description import (
     SUBSAMPLE_SEQUENCE,
     TRAFFIC_LIGHT_FEATURES,
 )
+from utils.geometry import (
+    get_so2_from_se2,
+    get_transformation_matrix,
+    get_yaw_from_se2,
+    transform_points,
+)
+from utils.tensor_utils import force_pad_batch_size
 
 ROADGRAPH_TYPES_OF_INTEREST: Final = {
     "LaneCenter-Freeway",

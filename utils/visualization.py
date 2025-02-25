@@ -8,17 +8,16 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.patches import Rectangle
 from matplotlib.transforms import Affine2D
 
-from common_utils.geometry import (
-    get_transformation_matrix,
-    transform_points,
-)
-
 from data_utils.feature_description import (
+    _ROADGRAPH_IDX_TO_TYPE,
+    _ROADGRAPH_TYPE_TO_COLOR,
+    MAX_AGENTS_TO_PREDICT,
     NUM_FUTURE_FRAMES,
     NUM_HISTORY_FRAMES,
-    _ROADGRAPH_TYPE_TO_COLOR,
-    _ROADGRAPH_IDX_TO_TYPE,
-    MAX_AGENTS_TO_PREDICT,
+)
+from utils.geometry import (
+    get_transformation_matrix,
+    transform_points,
 )
 
 plt.style.use("dark_background")
