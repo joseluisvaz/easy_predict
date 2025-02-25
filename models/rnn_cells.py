@@ -1,10 +1,10 @@
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from common_utils.tensor_utils import flatten_agent_dim, expand_agent_dim
+from utils.tensor_utils import expand_agent_dim, flatten_agent_dim
 
 
 class MultiAgentLSTMCell(nn.Module):

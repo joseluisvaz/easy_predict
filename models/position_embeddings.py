@@ -1,5 +1,6 @@
-import torch
 import math
+
+import torch
 
 
 def gen_sineembed_for_position(

@@ -1,6 +1,6 @@
+import typing as T
 from collections import OrderedDict
 from typing import Dict
-import typing as T
 
 import tensorflow as tf
 

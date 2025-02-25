@@ -3,8 +3,8 @@ from argparse import ArgumentParser, Namespace
 import lightning as L
 from omegaconf import OmegaConf
 
-from metrics_callback import OnTrainCallback
-from prediction_module import PredictionLightningModule
+from models.pl_module import PredictionLightningModule
+from utils.metrics_callback import OnTrainCallback
 
 
 def main(use_gpu: bool, ckpt_path: str) -> None:

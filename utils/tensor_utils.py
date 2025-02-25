@@ -1,8 +1,7 @@
 from typing import TypeVar
 
-
-import torch
 import numpy as np
+import torch
 from torch import Tensor
 
 Array = TypeVar("Array", np.ndarray, Tensor)

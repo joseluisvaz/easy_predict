@@ -1,13 +1,10 @@
+import typing as T
 from collections import defaultdict
 
-import torch.nn.functional as F
-from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
-
-
 import torch
+import torch.nn.functional as F
 
-
-import typing as T
+from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
 
 
 def pad_second_dim(tensor: torch.Tensor, target_size: int) -> torch.Tensor:

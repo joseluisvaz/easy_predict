@@ -9,8 +9,8 @@ from lightning.pytorch.tuner import Tuner
 from omegaconf import OmegaConf
 from pytorch_lightning.profilers import SimpleProfiler
 
-from metrics_callback import OnTrainCallback
-from prediction_module import PredictionLightningModule
+from models.pl_module import PredictionLightningModule
+from utils.metrics_callback import OnTrainCallback
 
 torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")
@@ -66,9 +66,10 @@ def main(
         # limit_val_batches=0.1,
     )
 
+    # TODO: lr finder is not working with the current module
     if args.lr_find and not fast_dev_run:
         tuner = Tuner(trainer)
-        lr_finder = tuner.lr_find(module, min_lr=2e-4, max_lr=2e-4)
+        lr_finder = tuner.lr_find(module, min_lr=2e-5, max_lr=8e-5)
 
         fig = lr_finder.plot(suggest=True)
         fig.savefig("learning_rate.png")
@@ -83,7 +84,7 @@ def _parse_arguments() -> Namespace:
     parser = ArgumentParser(allow_abbrev=True)
     parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
     parser.add_argument("--profile", action="store_true", help="Profile the training")
-    parser.add_argument("--lr_find", action="store_true", help="LR find")
+    parser.add_argument("--lr-find", action="store_true", help="LR find")
     parser.add_argument("--gpu", action="store_true", help="Use GPU")
     parser.add_argument("--ckpt", required=False, type=str, help="Checkpoint file")
     return parser.parse_args()
@@ -92,7 +93,7 @@ def _parse_arguments() -> Namespace:
 if __name__ == "__main__":
     args = _parse_arguments()
 
-    if not args.fast_dev_run:
+    if not args.fast_dev_run and not args.lr_find:
         task = Task.init(
             project_name="TrajectoryPrediction", task_name="SimpleAgentPrediction MCG"
         )

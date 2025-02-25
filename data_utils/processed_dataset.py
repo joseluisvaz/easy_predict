@@ -6,8 +6,8 @@ import h5py
 import numpy as np
 from torch.utils.data import Dataset
 
-from common_utils.tensor_utils import force_pad_batch_size
 from data_utils.data_augmentation import move_frame_to_agent_of_idx
+from utils.tensor_utils import force_pad_batch_size
 
 
 def mask_only_target_agents_and_sdc(
