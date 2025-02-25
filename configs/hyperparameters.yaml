@@ -1,17 +1,22 @@
 # Train arguments
-max_epochs: 500
-batch_size: 64
-val_batch_size: 8 # validation works with scenes and we can only fit 8 scenes in the GPU
-accumulate_grad_batches: 1
-learning_rate: 0.001
-weight_decay: 0.01
-grad_norm_clip: 5.0
-eta_min: 1.0E-5
+data_module:
+  train_dataset: data/files/training
+  val_dataset: data/files/validation
+  
+  batch_size: 64
+  val_batch_size: 8 # validation works with scenes and we can only fit 8 scenes in the GPU
+  num_workers: 32
 
-# Data arguments
-train_dataset: data/files/training
-val_dataset: data/files/validation
-num_workers: 32
+max_epochs: 500
+accumulate_grad_batches: 1
+grad_norm_clip: 5.0
+weight_decay: 0.01
+learning_rate: 0.001
+
+# For visualization
+viz_scenario_offset: 10 # The scenario offset to start the visualization dataloader from 
+viz_num_scenarios: 5 # The number of scenarios to visualize
+
 
 data_perturb:
   anchor_frame:

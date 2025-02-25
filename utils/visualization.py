@@ -15,10 +15,7 @@ from data_utils.feature_description import (
     NUM_FUTURE_FRAMES,
     NUM_HISTORY_FRAMES,
 )
-from utils.geometry import (
-    get_transformation_matrix,
-    transform_points,
-)
+from utils.geometry import get_transformation_matrix, transform_points
 
 plt.style.use("dark_background")
 
@@ -123,6 +120,15 @@ class AgentTrajectories:
 def _process_agent_trajectories(
     single_sample: T.Dict[str, torch.Tensor], anchor_index: int
 ) -> AgentTrajectories:
+    """Process the agent trajectories.
+
+    Args:
+        single_sample: A single sample from the validation set.
+        anchor_index: The index of the anchor agent.
+
+    Returns:
+        AgentTrajectories: The processed agent trajectories.
+    """
     # Crop the future positions to match the number of timesteps
     target_positions = (
         single_sample["gt_states"][anchor_index, :, -NUM_FUTURE_FRAMES:, :2]
@@ -176,6 +182,12 @@ def _process_agent_trajectories(
 def _plot_agent_trajectories(
     single_sample: T.Dict[str, torch.Tensor], anchor_index: int
 ) -> None:
+    """Plot the agent trajectories.
+
+    Args:
+        single_sample: A single sample from the validation set.
+        anchor_index: The index of the anchor agent.
+    """
     agent_trajectories = _process_agent_trajectories(single_sample, anchor_index)
 
     for sequence in agent_trajectories.history_sequences:
@@ -206,15 +218,24 @@ def _plot_agent_trajectories(
 
 @dataclass
 class ProcessedMapFeatures:
-    points: np.ndarray
-    dirs: np.ndarray
-    types: np.ndarray
-    ids: np.ndarray
+    points: np.ndarray  # [N, 2]
+    dirs: np.ndarray  # [N, 2]
+    types: np.ndarray  # [N,] type of each polyline
+    ids: np.ndarray  # [N,] id of each polyline
 
 
 def _process_map_features(
     single_sample: T.Dict[str, torch.Tensor], anchor_index: int
 ) -> ProcessedMapFeatures:
+    """Process the map features.
+
+    Args:
+        single_sample: A single sample from the validation set.
+        anchor_index: The index of the anchor agent.
+
+    Returns:
+        ProcessedMapFeatures: The processed map features.
+    """
     map_features = single_sample["roadgraph_features"][anchor_index].cpu()
     map_avails = single_sample["roadgraph_features_mask"][anchor_index].cpu()
     map_types = single_sample["roadgraph_features_types"][anchor_index].cpu()
@@ -244,6 +265,12 @@ def _process_map_features(
 def _plot_map_features(
     single_sample: T.Dict[str, torch.Tensor], anchor_index: int
 ) -> None:
+    """Plot the map features.
+
+    Args:
+        single_sample: A single sample from the validation set.
+        anchor_index: The index of the anchor agent.
+    """
     processed_map_features = _process_map_features(single_sample, anchor_index)
 
     unique_polyline_ids = torch.unique(processed_map_features.ids)
@@ -298,6 +325,13 @@ def plot_scene(
     predicted_positions: T.Optional[torch.Tensor] = None,
     zoom_out: bool = False,
 ) -> None:
+    """Plot a scene with the map features, agent trajectories, and predicted trajectories.
+
+    Args:
+        single_sample: A single sample from the validation set.
+        predicted_positions: The predicted positions of the sample.
+        zoom_out: Whether to zoom out the plot or to focus on the agent.
+    """
     anchor_index = 0
 
     plt.figure()
