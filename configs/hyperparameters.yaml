@@ -1,7 +1,7 @@
 # Train arguments
 data_module:
-  train_dataset: data/files/training
-  val_dataset: data/files/validation
+  train_dataset: data/todeletefiles
+  val_dataset: data/todeletefiles
   
   batch_size: 64
   val_batch_size: 8 # validation works with scenes and we can only fit 8 scenes in the GPU

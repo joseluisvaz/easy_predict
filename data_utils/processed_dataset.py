@@ -156,7 +156,6 @@ def _get_scenario_from_h5_file(
     file: T.Mapping[str, np.ndarray],
 ) -> T.Dict[str, np.ndarray]:
     return {
-        "scenario_id": np.array(file["scenario_id"]).astype(np.int64),
         "gt_states": np.array(file["gt_states"]).astype(
             np.float32
         ),  # [N_AGENTS, TIME, FEATS]
@@ -229,20 +228,19 @@ class ScenarioDataset(Dataset):
         filepath: str,
     ):
         self.datadir = pathlib.Path(filepath)
-        self.files = list(self.datadir.glob("batch_*.pkl"))
-        with open(self.datadir / "coupled_indices.pkl", "rb") as f:
-            self.coupled_indices = pickle.load(f)
+
+        with open(self.datadir / "metadata.pkl", "rb") as f:
+            self.metadata = pickle.load(f)
 
     def __len__(self) -> int:
-        return len(self.files)
+        return len(self.metadata["scenario_idx_to_uuid"])
 
     def __getitem__(self, scenario_idx: int) -> T.List[T.Dict[str, np.ndarray]]:
-        with open(self.datadir / f"batch_{scenario_idx}.pkl", "rb") as f:
-            sample = pickle.load(f)
+        scenario_uuid = self.metadata["scenario_idx_to_uuid"][scenario_idx]
+        agent_indices = self.metadata["scenario_uuid_to_actors"][scenario_uuid]
 
-        agent_indices = self.coupled_indices[
-            self.coupled_indices[:, 0] == scenario_idx
-        ][:, 1]
+        with open(self.datadir / f"scenario_{scenario_uuid}.pkl", "rb") as f:
+            sample = pickle.load(f)
 
         sample = _get_scenario_from_h5_file(sample)
 
@@ -258,6 +256,7 @@ class ScenarioDataset(Dataset):
             )
 
             agent_sample["agent_to_predict"] = np.array(agent_idx).astype(np.int64)
+            agent_sample["scenario_id"] = np.array(scenario_idx).astype(np.int64)
             batches.append(agent_sample)
 
         return batches
@@ -268,20 +267,21 @@ class AgentCentricDataset(Dataset):
         self,
         filepath: str,
     ):
-        # Get all .pt files in the directory
         self.datadir = pathlib.Path(filepath)
-        with open(self.datadir / "coupled_indices.pkl", "rb") as f:
-            self.coupled_indices = pickle.load(f)
+        with open(self.datadir / "metadata.pkl", "rb") as f:
+            self.metadata = pickle.load(f)
 
     def __len__(self) -> int:
-        return len(self.coupled_indices)
+        return len(self.metadata["coupled_indices"])
 
     def __getitem__(self, idx: int) -> T.Dict[str, np.ndarray]:
-        scenario_idx, agent_idx = self.coupled_indices[idx]
+        scenario_idx, agent_idx = self.metadata["coupled_indices"][idx]
+        scenario_uuid = self.metadata["scenario_idx_to_uuid"][scenario_idx]
 
-        with open(self.datadir / f"batch_{scenario_idx}.pkl", "rb") as f:
+        with open(self.datadir / f"scenario_{scenario_uuid}.pkl", "rb") as f:
             sample = pickle.load(f)
 
+        # TODO: Maybe we should remove this function and just use the sample as is
         sample = _get_scenario_from_h5_file(sample)
         sample = move_frame_to_agent_of_idx(agent_idx, sample)
 
@@ -290,5 +290,7 @@ class AgentCentricDataset(Dataset):
             sample["gt_states"], sample["gt_states_avails"]
         )
 
+        # TODO: Maybe move to data generation?
+        sample["scenario_id"] = np.array(scenario_idx).astype(np.int64)
         sample["agent_to_predict"] = np.array(agent_idx).astype(np.int64)
         return sample

@@ -8,7 +8,11 @@ SUBSAMPLE_SEQUENCE = 2  # e.g. 2 means 5 Hz instead of 10Hz sampling
 NUM_HISTORY_FRAMES = 10 // SUBSAMPLE_SEQUENCE
 NUM_FUTURE_FRAMES = 80 // SUBSAMPLE_SEQUENCE
 NUM_MAP_SAMPLES = 30000
+SEQUENCE_LENGTH = NUM_HISTORY_FRAMES + NUM_FUTURE_FRAMES + 1
 MAX_AGENTS_TO_PREDICT = 8
+
+# Configuration for the max features
+MAX_AGENTS_IN_SCENARIO = 128
 
 # Configuration for the features
 MAP_MIN_NUM_OF_POINTS: T.Final = 100
@@ -356,4 +360,7 @@ def get_feature_description() -> Dict:
     features_description.update(dict(ROADGRAPH_FEATURES))
     features_description.update(dict(STATE_FEATURES))
     features_description.update(TRAFFIC_LIGHT_FEATURES)
+    features_description["scenario/id"] = tf.io.FixedLenFeature(
+        [1], tf.string, default_value=None
+    )
     return features_description

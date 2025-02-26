@@ -29,6 +29,11 @@ from utils.geometry import (
 )
 from utils.tensor_utils import force_pad_batch_size
 
+# Avoid warnings about the PyTorch API of nested tensors
+warnings.filterwarnings(
+    "ignore", message="The PyTorch API of nested tensors is in prototype stage"
+)
+
 ROADGRAPH_TYPES_OF_INTEREST: Final = {
     "LaneCenter-Freeway",
     "LaneCenter-SurfaceStreet",
@@ -395,15 +400,15 @@ def _parse_traffic_light_features(
 ) -> Dict[str, np.ndarray]:
     past_tl_pos = np.stack(
         (
-            decoded_example["traffic_light_state/past/x"],
-            decoded_example["traffic_light_state/past/y"],
+            decoded_example["traffic_light_state/past/x"].transpose(),
+            decoded_example["traffic_light_state/past/y"].transpose(),
         ),
         axis=-1,
     )
     current_tl_pos = np.stack(
         (
-            decoded_example["traffic_light_state/current/x"],
-            decoded_example["traffic_light_state/current/y"],
+            decoded_example["traffic_light_state/current/x"].transpose(),
+            decoded_example["traffic_light_state/current/y"].transpose(),
         ),
         axis=-1,
     )
@@ -411,15 +416,15 @@ def _parse_traffic_light_features(
 
     tl_states_categorical = np.concatenate(
         (
-            decoded_example["traffic_light_state/past/state"],
-            decoded_example["traffic_light_state/current/state"],
+            decoded_example["traffic_light_state/past/state"].transpose(),
+            decoded_example["traffic_light_state/current/state"].transpose(),
         ),
         axis=1,
     )
     tl_avails = np.concatenate(
         (
-            decoded_example["traffic_light_state/past/valid"],
-            decoded_example["traffic_light_state/current/valid"],
+            decoded_example["traffic_light_state/past/valid"].transpose(),
+            decoded_example["traffic_light_state/current/valid"].transpose(),
         ),
         axis=1,
     )

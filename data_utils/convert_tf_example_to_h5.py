@@ -6,13 +6,14 @@ from argparse import ArgumentParser, Namespace
 import h5py
 import numpy as np
 import tensorflow as tf
-from feature_description import (
+from tqdm import tqdm
+
+from data_utils.feature_description import (
     ROADGRAPH_FEATURES,
     STATE_FEATURES,
     TRAFFIC_LIGHT_FEATURES,
     get_feature_description,
 )
-from tqdm import tqdm
 
 VALIDATION_LENGTH = 44102
 BATCH_SIZE = 200  # Adjust the batch size as needed
@@ -29,7 +30,7 @@ def _parse_arguments() -> Namespace:
         required=True,
         help="Path to the folder with the tf records.",
     )
-    parser.add_argument("--out", type=str, required=True, help="Output h5 file")
+    parser.add_argument("--out-dir", type=str, required=True, help="Output h5 file")
     return parser.parse_args()
 
 
@@ -211,4 +212,4 @@ def _convert_to_h5(data_dir: str, out_path: str) -> None:
 
 if __name__ == "__main__":
     args = _parse_arguments()
-    _convert_to_h5(args.data_dir, args.out)
+    _convert_to_h5(args.data_dir, args.out_dir)
