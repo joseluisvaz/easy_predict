@@ -39,9 +39,6 @@ def compute_loss(
     return torch.mean(errors * total_mask)
 
 
-AGENT_INPUT_FEATURES: T.Final[int] = 12
-
-
 class PredictionLightningModule(L.LightningModule):
     def __init__(
         self,
@@ -60,10 +57,8 @@ class PredictionLightningModule(L.LightningModule):
         self.fast_dev_run = fast_dev_run
 
         self.model = PredictionModel(
-            input_features=AGENT_INPUT_FEATURES,
-            hidden_size=hyperparameters.hidden_size,
             n_timesteps=NUM_FUTURE_FRAMES,
-            model_config=hyperparameters.model_config,
+            config=hyperparameters.model_config,
         )
 
         # self.model = torch.compile(self.model)

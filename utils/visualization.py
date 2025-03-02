@@ -269,6 +269,9 @@ def _plot_map_features(
         filtered_dirs = processed_map_features.dirs[polyline_id][avails]
         type_id = processed_map_features.types[polyline_id]
 
+        if IDX_TO_ROADGRAPH_TYPE[type_id] in {"TYPE_CROSSWALK", "TYPE_SPEED_BUMP"}:
+            filtered_points = np.concatenate([filtered_points, filtered_points[0:1]])
+
         color = ROADGRAPH_TYPE_TO_COLOR[IDX_TO_ROADGRAPH_TYPE[type_id.item()]]
         if IDX_TO_ROADGRAPH_TYPE[type_id] == "TYPE_STOP_SIGN":
             plt.scatter(
