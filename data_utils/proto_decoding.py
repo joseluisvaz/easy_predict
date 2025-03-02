@@ -5,7 +5,6 @@ import numpy as np
 from waymo_open_dataset.protos import scenario_pb2
 
 from data_utils.feature_description import (
-    MAX_AGENTS_IN_SCENARIO,
     ROADGRAPH_TYPE_TO_IDX,
     SEQUENCE_LENGTH,
     SUBSAMPLE_SEQUENCE,
@@ -13,10 +12,11 @@ from data_utils.feature_description import (
 
 POLYLINE_SUBSAMPLE_FACTOR = 4
 MAX_POLYLINE_LENGTH = 20
-MAX_NUM_POLYLINES = 800
+MAX_NUM_POLYLINES = 1000
 MAX_NUM_TL = 16
 MAX_NUM_TL_TIMES = 11
 MAX_ORIGINAL_SEQUENCE_LENGTH = 91  # (10Hz, 9.1s)
+MAX_AGENTS_IN_SCENARIO = 128
 
 LANE_TYPE_TO_GLOBAL_TYPE = {
     0: "TYPE_UNDEFINED",
@@ -257,7 +257,11 @@ def _get_polyline_from_map_feature(
 def _subsample_polyline_by_type(polyline: np.ndarray, global_type: int) -> np.ndarray:
     """Subsample the polyline by type."""
     # TODO: make the type and int, currently it is a float on the same tensor
-    if global_type == ROADGRAPH_TYPE_TO_IDX["TYPE_STOP_SIGN"]:
+    if global_type in (
+        ROADGRAPH_TYPE_TO_IDX["TYPE_STOP_SIGN"],
+        ROADGRAPH_TYPE_TO_IDX["TYPE_CROSSWALK"],
+        ROADGRAPH_TYPE_TO_IDX["TYPE_SPEED_BUMP"],
+    ):
         return polyline
     else:
         return _subsample_polyline(polyline, POLYLINE_SUBSAMPLE_FACTOR)

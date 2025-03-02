@@ -102,76 +102,6 @@ def move_frame_to_agent_of_idx(
     return _perturb_pose(transformation_matrix, copy.deepcopy(batch))
 
 
-def _generate_agent_centric_samples(
-    sample: T.Dict[str, np.ndarray],
-) -> T.Dict[str, np.ndarray]:
-    """Generate multiple samples for each agent in the scenario.
-    Args:
-        sample (T.Dict[str, np.ndarray]): contains the description of an scenario, including
-        agent, map and tl information.
-    Returns:
-        T.Dict[str, np.ndarray]: adds an extra agent dimension to each tensor in the sample
-        and for each available agent it moves the sample to the agent's frame and adds it
-        to the output batch.
-    """
-
-    from collections import defaultdict
-
-    agent_batch = defaultdict(list)
-
-    MAX_AGENTS = 8
-    for agent_idx in range(MAX_AGENTS):
-        tracks_to_predict = sample["tracks_to_predict"]
-        if not tracks_to_predict[agent_idx]:
-            continue
-
-        agent_batch["agent_to_predict"].append(agent_idx)
-        agent_sample = move_frame_to_agent_of_idx(agent_idx, sample)
-        for key in agent_sample:
-            agent_batch[key].append(agent_sample[key])
-
-    for key in agent_batch:
-        agent_batch[key] = np.stack(agent_batch[key], axis=0)
-
-    return agent_batch
-
-
-def _get_scenario_from_h5_file(
-    file: T.Mapping[str, np.ndarray],
-) -> T.Dict[str, np.ndarray]:
-    return {
-        "gt_states": np.array(file["gt_states"]).astype(
-            np.float32
-        ),  # [N_AGENTS, TIME, FEATS]
-        "gt_states_avails": np.array(file["gt_states_avails"]).astype(
-            np.bool_
-        ),  # [N_AGENTS, TIME,]
-        "actor_type": np.array(file["actor_type"]).astype(np.int64),  # [N_AGENTS,]
-        "is_sdc": np.array(file["is_sdc"]).astype(np.bool_),  # [N_AGENTS,]
-        "tracks_to_predict": np.array(file["tracks_to_predict"]).astype(
-            np.bool_
-        ),  # [N_AGENTS,]
-        "roadgraph_features": np.array(file["roadgraph_features"]).astype(
-            np.float32
-        ),  # [N_POLYLINE, N_POINTS, FEATS]
-        "roadgraph_features_mask": np.array(file["roadgraph_features_mask"]).astype(
-            np.bool_
-        ),  # [N_POLYLINE, N_POINTS]
-        "roadgraph_features_types": np.array(file["roadgraph_features_types"]).astype(
-            np.int64
-        ),  # [N_POLYLINE,]
-        "tl_states": np.array(file["tl_states"]).astype(
-            np.float32
-        ),  # [N_TRAFFIC_LIGHTS, TIME, 2]
-        "tl_states_categorical": np.array(file["tl_states_categorical"]).astype(
-            np.int64
-        ),  # [N_TRAFFIC_LIGHTS, TIME,]
-        "tl_avails": np.array(file["tl_avails"]).astype(
-            np.bool_
-        ),  # [N_TRAFFIC_LIGHTS, TIME,]
-    }
-
-
 class ScenarioDataset(Dataset):
     def __init__(
         self,
@@ -191,8 +121,6 @@ class ScenarioDataset(Dataset):
 
         with open(self.datadir / f"scenario_{scenario_uuid}.pkl", "rb") as f:
             sample = pickle.load(f)
-
-        sample = _get_scenario_from_h5_file(sample)
 
         batches = []
         for agent_idx in agent_indices:
@@ -231,8 +159,6 @@ class AgentCentricDataset(Dataset):
         with open(self.datadir / f"scenario_{scenario_uuid}.pkl", "rb") as f:
             sample = pickle.load(f)
 
-        # TODO: Maybe we should remove this function and just use the sample as is
-        sample = _get_scenario_from_h5_file(sample)
         sample = move_frame_to_agent_of_idx(agent_idx, sample)
 
         # TODO: Move to feature generation
