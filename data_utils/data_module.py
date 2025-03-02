@@ -3,7 +3,7 @@ from omegaconf import DictConfig
 from torch.utils.data import DataLoader
 
 from data_utils.feature_generation import collate_waymo_scenario, collate_waymo_stack
-from data_utils.processed_dataset import AgentCentricDataset, ScenarioDataset
+from data_utils.waymo_dataset import AgentCentricDataset, ScenarioDataset
 
 
 class AgentCentricDataModule(L.LightningDataModule):

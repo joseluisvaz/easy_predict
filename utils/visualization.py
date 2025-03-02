@@ -242,7 +242,7 @@ def _process_map_features(
 
     return ProcessedMapFeatures(
         points=map_features[..., :2],
-        dirs=map_features[..., 3:5],
+        dirs=map_features[..., 2:4],
         types=map_types,
         avails=map_avails,
     )
