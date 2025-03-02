@@ -23,6 +23,7 @@ GT_STATES_STDS = [41.7659, 29.3103, 1.2764, 0.3939, 3.4035, 5.1634, 2.5289]
 ROADGRAPH_MEANS = [2.4929e01, 2.6036e00, 8.8117e-03, -1.2278e-03]
 ROADGRAPH_STDS = [63.7964, 36.8537, 0.7378, 0.6223]
 
+
 _ROADGRAPH_TYPE_TO_IDX = {
     "LaneCenter-Freeway": 1,
     "LaneCenter-SurfaceStreet": 2,
@@ -364,3 +365,50 @@ def get_feature_description() -> Dict:
         [1], tf.string, default_value=None
     )
     return features_description
+
+
+ROADGRAPH_TYPE_TO_IDX = {
+    # for lane
+    "TYPE_FREEWAY": 0,
+    "TYPE_SURFACE_STREET": 1,
+    "TYPE_BIKE_LANE": 2,
+    # for roadline
+    "TYPE_BROKEN_SINGLE_WHITE": 3,
+    "TYPE_SOLID_SINGLE_WHITE": 4,
+    "TYPE_SOLID_DOUBLE_WHITE": 5,
+    "TYPE_BROKEN_SINGLE_YELLOW": 6,
+    "TYPE_BROKEN_DOUBLE_YELLOW": 7,
+    "TYPE_SOLID_SINGLE_YELLOW": 8,
+    "TYPE_SOLID_DOUBLE_YELLOW": 9,
+    "TYPE_PASSING_DOUBLE_YELLOW": 10,
+    # for roadedge
+    "TYPE_ROAD_EDGE_BOUNDARY": 11,
+    "TYPE_ROAD_EDGE_MEDIAN": 12,
+    # for stopsign
+    "TYPE_STOP_SIGN": 13,
+    # for crosswalk
+    "TYPE_CROSSWALK": 14,
+    # for speed bump
+    "TYPE_SPEED_BUMP": 15,
+}
+
+IDX_TO_ROADGRAPH_TYPE = {idx: _type for _type, idx in ROADGRAPH_TYPE_TO_IDX.items()}
+
+ROADGRAPH_TYPE_TO_COLOR = {
+    "TYPE_FREEWAY": "gray",
+    "TYPE_SURFACE_STREET": "gray",
+    "TYPE_BIKE_LANE": "gray",
+    "TYPE_BROKEN_SINGLE_WHITE": "white",
+    "TYPE_SOLID_SINGLE_WHITE": "white",
+    "TYPE_SOLID_DOUBLE_WHITE": "white",
+    "TYPE_BROKEN_SINGLE_YELLOW": "yellow",
+    "TYPE_BROKEN_DOUBLE_YELLOW": "yellow",
+    "TYPE_SOLID_SINGLE_YELLOW": "yellow",
+    "TYPE_SOLID_DOUBLE_YELLOW": "yellow",
+    "TYPE_PASSING_DOUBLE_YELLOW": "yellow",
+    "TYPE_ROAD_EDGE_BOUNDARY": "purple",
+    "TYPE_ROAD_EDGE_MEDIAN": "purple",
+    "TYPE_STOP_SIGN": "red",
+    "TYPE_CROSSWALK": "orange",
+    "TYPE_SPEED_BUMP": "blue",
+}

@@ -176,9 +176,6 @@ def _get_scenario_from_h5_file(
         "roadgraph_features_types": np.array(file["roadgraph_features_types"]).astype(
             np.int64
         ),  # [N_POLYLINE,]
-        "roadgraph_features_ids": np.array(file["roadgraph_features_ids"]).astype(
-            np.int16
-        ),  # [N_POLYLINE,]
         "tl_states": np.array(file["tl_states"]).astype(
             np.float32
         ),  # [N_TRAFFIC_LIGHTS, TIME, 2]

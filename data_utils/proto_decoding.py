@@ -6,6 +6,7 @@ from waymo_open_dataset.protos import scenario_pb2
 
 from data_utils.feature_description import (
     MAX_AGENTS_IN_SCENARIO,
+    ROADGRAPH_TYPE_TO_IDX,
     SEQUENCE_LENGTH,
     SUBSAMPLE_SEQUENCE,
 )
@@ -43,31 +44,6 @@ ROAD_EDGE_TYPE_TO_GLOBAL_TYPE = {
 }
 
 
-GLOBAL_TYPE_TO_IDX = {
-    # for lane
-    "TYPE_FREEWAY": 0,
-    "TYPE_SURFACE_STREET": 1,
-    "TYPE_BIKE_LANE": 2,
-    # for roadline
-    "TYPE_BROKEN_SINGLE_WHITE": 3,
-    "TYPE_SOLID_SINGLE_WHITE": 4,
-    "TYPE_SOLID_DOUBLE_WHITE": 5,
-    "TYPE_BROKEN_SINGLE_YELLOW": 6,
-    "TYPE_BROKEN_DOUBLE_YELLOW": 7,
-    "TYPE_SOLID_SINGLE_YELLOW": 8,
-    "TYPE_SOLID_DOUBLE_YELLOW": 9,
-    "TYPE_PASSING_DOUBLE_YELLOW": 10,
-    # for roadedge
-    "TYPE_ROAD_EDGE_BOUNDARY": 11,
-    "TYPE_ROAD_EDGE_MEDIAN": 12,
-    # for stopsign
-    "TYPE_STOP_SIGN": 13,
-    # for crosswalk
-    "TYPE_CROSSWALK": 14,
-    # for speed bump
-    "TYPE_SPEED_BUMP": 15,
-}
-
 TL_SIGNAL_IDX_TO_STATE = {
     0: "LANE_STATE_UNKNOWN",
     # // States for traffic signals with arrows.
@@ -82,9 +58,6 @@ TL_SIGNAL_IDX_TO_STATE = {
     7: "LANE_STATE_FLASHING_STOP",
     8: "LANE_STATE_FLASHING_CAUTION",
 }
-
-
-LANE_TO_GLOBAL_TYPE = {}
 
 
 def _create_agent_masks(
@@ -117,7 +90,6 @@ def _extract_agent_states(
                 x.heading,
                 x.velocity_x,
                 x.velocity_y,
-                x.valid,
             ],
             dtype=np.float32,
         )
@@ -152,19 +124,22 @@ def pad_or_truncate(features: np.ndarray, max_size: int, padding: Any) -> np.nda
 
 
 def decode_agent_features(scenario: scenario_pb2.Scenario) -> dict[str, np.ndarray]:
-    features = defaultdict(list)
-
     tracks_to_predict, is_sdc = _create_agent_masks(scenario)
 
+    features_as_lists = defaultdict(list)
     for agent in scenario.tracks:
         states, avails, actor_type = _extract_agent_states(agent)
-        features["gt_states"].append(states)
-        features["gt_states_avails"].append(avails)
-        features["actor_type"].append(actor_type)
+        features_as_lists["gt_states"].append(states)
+        features_as_lists["gt_states_avails"].append(avails)
+        features_as_lists["actor_type"].append(actor_type)
 
+    features = {}
     # Stack features in the agent dimension
     for key in ["gt_states", "gt_states_avails", "actor_type"]:
-        features[key] = np.stack(features[key])
+        features[key] = np.stack(features_as_lists[key])
+
+    features["tracks_to_predict"] = tracks_to_predict.copy()
+    features["is_sdc"] = is_sdc.copy()
 
     def _order_predictable_agents(feature: np.ndarray, padding: Any) -> np.ndarray:
         all_agents = np.concatenate(
@@ -183,21 +158,25 @@ def decode_agent_features(scenario: scenario_pb2.Scenario) -> dict[str, np.ndarr
 
     # Make sure output types are correct, TODO: move to unit tests
     output_types_and_expected_sizes = {
-        "gt_states": (np.float32, (MAX_AGENTS_IN_SCENARIO, SEQUENCE_LENGTH, 8)),
+        "gt_states": (np.float32, (MAX_AGENTS_IN_SCENARIO, SEQUENCE_LENGTH, 7)),
         "gt_states_avails": (np.bool_, (MAX_AGENTS_IN_SCENARIO, SEQUENCE_LENGTH)),
         "actor_type": (np.int64, (MAX_AGENTS_IN_SCENARIO,)),
         "is_sdc": (np.bool_, (MAX_AGENTS_IN_SCENARIO,)),
         "tracks_to_predict": (np.bool_, (MAX_AGENTS_IN_SCENARIO,)),
     }
 
-    for key in features.keys():
-        assert features[key].shape == output_types_and_expected_sizes[key][1]
-        assert features[key].dtype == output_types_and_expected_sizes[key][0]
+    for key in output_types_and_expected_sizes.keys():
+        assert features[key].shape == output_types_and_expected_sizes[key][1], (
+            f"{key} has shape {features[key].shape} but should have shape {output_types_and_expected_sizes[key][1]}"
+        )
+        assert features[key].dtype == output_types_and_expected_sizes[key][0], (
+            f"{key} has dtype {features[key].dtype} but should have dtype {output_types_and_expected_sizes[key][0]}"
+        )
 
     return features
 
 
-def get_polyline_dir(polyline):
+def get_polyline_dir(polyline: np.ndarray) -> np.ndarray:
     "adapted from: https://github.com/sshaoshuai/MTR/blob/master/mtr/datasets/waymo/data_preprocess.py"
     polyline_pre = np.roll(polyline, shift=1, axis=0)
     polyline_pre[0] = polyline[0]
@@ -208,7 +187,7 @@ def get_polyline_dir(polyline):
     return polyline_dir
 
 
-def _get_polyline_features(points, global_type):
+def _get_polyline_features(points: np.ndarray, global_type: int) -> np.ndarray:
     """Get the polyline features for a given points and global type."""
     cur_polyline = np.stack(
         [np.array([point.x, point.y, point.z, global_type]) for point in points],
@@ -232,25 +211,25 @@ def _get_type_from_map_feature(map_feature: Any) -> Optional[int]:
     if map_feature.lane.ByteSize() > 0:
         if map_feature.lane.type == 0:
             return None
-        return GLOBAL_TYPE_TO_IDX[LANE_TYPE_TO_GLOBAL_TYPE[map_feature.lane.type]]
+        return ROADGRAPH_TYPE_TO_IDX[LANE_TYPE_TO_GLOBAL_TYPE[map_feature.lane.type]]
     elif map_feature.road_line.ByteSize() > 0:
         if map_feature.road_line.type == 0:
             return None
-        return GLOBAL_TYPE_TO_IDX[
+        return ROADGRAPH_TYPE_TO_IDX[
             ROAD_LINE_TYPE_TO_GLOBAL_TYPE[map_feature.road_line.type]
         ]
     elif map_feature.road_edge.ByteSize() > 0:
         if map_feature.road_edge.type == 0:
             return None
-        return GLOBAL_TYPE_TO_IDX[
+        return ROADGRAPH_TYPE_TO_IDX[
             ROAD_EDGE_TYPE_TO_GLOBAL_TYPE[map_feature.road_edge.type]
         ]
     elif map_feature.stop_sign.ByteSize() > 0:
-        return GLOBAL_TYPE_TO_IDX["TYPE_STOP_SIGN"]
+        return ROADGRAPH_TYPE_TO_IDX["TYPE_STOP_SIGN"]
     elif map_feature.crosswalk.ByteSize() > 0:
-        return GLOBAL_TYPE_TO_IDX["TYPE_CROSSWALK"]
+        return ROADGRAPH_TYPE_TO_IDX["TYPE_CROSSWALK"]
     elif map_feature.speed_bump.ByteSize() > 0:
-        return GLOBAL_TYPE_TO_IDX["TYPE_SPEED_BUMP"]
+        return ROADGRAPH_TYPE_TO_IDX["TYPE_SPEED_BUMP"]
     else:
         raise ValueError
 
@@ -278,7 +257,7 @@ def _get_polyline_from_map_feature(
 def _subsample_polyline_by_type(polyline: np.ndarray, global_type: int) -> np.ndarray:
     """Subsample the polyline by type."""
     # TODO: make the type and int, currently it is a float on the same tensor
-    if global_type == GLOBAL_TYPE_TO_IDX["TYPE_STOP_SIGN"]:
+    if global_type == ROADGRAPH_TYPE_TO_IDX["TYPE_STOP_SIGN"]:
         return polyline
     else:
         return _subsample_polyline(polyline, POLYLINE_SUBSAMPLE_FACTOR)
@@ -393,7 +372,7 @@ def decode_traffic_light_features(
     return {
         "tl_states": tl_states.transpose(1, 0, 2),
         "tl_states_categorical": tl_states_categorical.transpose(1, 0),
-        "tl_states_avails": tl_states_avails.transpose(1, 0),
+        "tl_avails": tl_states_avails.transpose(1, 0),
     }
 
 
@@ -406,15 +385,15 @@ def generate_features_from_proto(
     features_dict.update(decode_traffic_light_features(scenario))
 
     # gt_states: (x, y, length, width, yaw, velocity_x, velocity_y)
-    # roadgraph_features: (x, y, dx, dy)
+    # roadgraph_features: (x, y, z, dx, dy, dz, type)
     # tl_states: (x, y, z)
     feature_to_shape_and_type = {
-        "gt_states": (np.float32, (MAX_AGENTS_IN_SCENARIO, SEQUENCE_LENGTH, 8)),
+        "gt_states": (np.float32, (MAX_AGENTS_IN_SCENARIO, SEQUENCE_LENGTH, 7)),
         "gt_states_avails": (np.bool_, (MAX_AGENTS_IN_SCENARIO, SEQUENCE_LENGTH)),
         "actor_type": (np.int64, (MAX_AGENTS_IN_SCENARIO,)),
         "is_sdc": (np.bool_, (MAX_AGENTS_IN_SCENARIO,)),
         "tracks_to_predict": (np.bool_, (MAX_AGENTS_IN_SCENARIO,)),
-        "roadgraph_features": (np.float32, (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH, 4)),
+        "roadgraph_features": (np.float32, (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH, 7)),
         "roadgraph_features_mask": (np.bool_, (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH)),
         "roadgraph_features_types": (np.int64, (MAX_NUM_POLYLINES,)),
         "tl_states": (np.float32, (MAX_NUM_TL, MAX_NUM_TL_TIMES, 3)),
@@ -422,7 +401,7 @@ def generate_features_from_proto(
         "tl_avails": (np.bool_, (MAX_NUM_TL, MAX_NUM_TL_TIMES)),
     }
 
-    for key in features_dict.keys():
+    for key in feature_to_shape_and_type.keys():
         assert features_dict[key].dtype == feature_to_shape_and_type[key][0], (
             f"{key} has dtype {features_dict[key].dtype} but should have dtype {feature_to_shape_and_type[key][0]}"
         )

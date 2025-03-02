@@ -11,28 +11,22 @@ from argparse import ArgumentParser, Namespace
 from collections import defaultdict
 from functools import partial
 from multiprocessing.managers import DictProxy
+from typing import Final
 
 import numpy as np
 import tensorflow as tf
 from rich.progress import TaskID
 from waymo_open_dataset.protos import scenario_pb2
 
-from data_utils.feature_description import (
-    MAX_AGENTS_TO_PREDICT,
-    get_feature_description,
-)
-from data_utils.feature_generation import _generate_features
 from data_utils.parallel_executor import ParallelExecutor
-from data_utils.proto_decoding import (
-    decode_agent_features,
-    decode_map_features,
-    decode_traffic_light_features,
-)
+from data_utils.proto_decoding import generate_features_from_proto
 
 # Global settings for Tensorflow, to avoid using GPUs and to limit the number of threads
 tf.config.set_visible_devices([], "GPU")
 tf.config.threading.set_intra_op_parallelism_threads(1)
 tf.config.threading.set_inter_op_parallelism_threads(1)
+
+AVG_NUM_RECORDS_PER_FILE: Final[int] = 400
 
 
 def _parse_arguments() -> Namespace:
@@ -61,14 +55,8 @@ def _process_file(
         A dictionary mapping from scenario id to valid actor indices.
     """
 
-    # def _count_records(file_path: str) -> int:
-    #     """Count the number of records in a tfrecord file. This is relatively fast."""
-    #     dataset = tf.data.TFRecordDataset(file_path, compression_type="")
-    #     return sum(1 for _ in dataset)
-
     file_path_str = str(file_path)
 
-    number_of_records = 600  # Average number of records per file
     dataset = tf.data.TFRecordDataset(file_path_str, compression_type="")
 
     mapping_scenario_id_to_valid_indices: defaultdict[str, list[int]] = defaultdict(
@@ -80,24 +68,14 @@ def _process_file(
         scenario.ParseFromString(payload)
 
         scenario_id = scenario.scenario_id
-        agent_features = decode_agent_features(scenario)
-        agent_features.update(decode_map_features(scenario))
-        agent_features.update(decode_traffic_light_features(scenario))
 
-        # Generate the processed features needed for training
-        # processed_features = _generate_features(numpy_example, False)
+        agent_features = generate_features_from_proto(scenario)
 
-        # # Keep track of the scenario id to save the valid indices for each agent
-        # scenario_id = numpy_example["scenario/id"].item()
-
-        # # Keep track of the valid indices for each agent and add it to the mapping, this is
-        # # used to filter out the invalid agents when loading the data
-        # for agent_id in range(MAX_AGENTS_TO_PREDICT):
-        #     if not processed_features["tracks_to_predict"][agent_id]:
-        #         continue
-
-        for agent in scenario.tracks:
-            mapping_scenario_id_to_valid_indices[scenario_id].append(agent.id)
+        tracks_to_predict_mask = agent_features["tracks_to_predict"]
+        for idx, is_track_to_predict in enumerate(tracks_to_predict_mask):
+            if not is_track_to_predict:
+                continue
+            mapping_scenario_id_to_valid_indices[scenario_id].append(idx)
 
         # # Save the processed features for the current scenario
         with open(out_path / f"scenario_{scenario_id}.pkl", "wb") as f:
@@ -105,13 +83,13 @@ def _process_file(
 
         tp_progress_dict[tp_task_id] = {
             "progress": n + 1,
-            "total": number_of_records,
+            "total": AVG_NUM_RECORDS_PER_FILE,
             "done": False,
         }
 
     tp_progress_dict[tp_task_id] = {
         "progress": n + 1,
-        "total": number_of_records,
+        "total": AVG_NUM_RECORDS_PER_FILE,
         "done": True,
     }
     return dict(mapping_scenario_id_to_valid_indices)
