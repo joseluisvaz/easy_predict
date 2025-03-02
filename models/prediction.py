@@ -202,7 +202,7 @@ class Decoder(nn.Module):
 
 class PredictionModel(nn.Module):
     NUM_MCG_LAYERS = 4
-    MAP_INPUT_SIZE = 27
+    MAP_INPUT_SIZE = 25
 
     def __init__(
         self,

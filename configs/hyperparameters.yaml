@@ -35,7 +35,7 @@ model_config:
     max_yaw_rate: 1.0
     delta_t: 0.2
   tl_encoder:
-    input_size: 12
+    input_size: 11
   
   # TODO put map input size here
     

@@ -190,12 +190,12 @@ def get_polyline_dir(polyline: np.ndarray) -> np.ndarray:
 def _get_polyline_features(points: np.ndarray, global_type: int) -> np.ndarray:
     """Get the polyline features for a given points and global type."""
     cur_polyline = np.stack(
-        [np.array([point.x, point.y, point.z, global_type]) for point in points],
+        [np.array([point.x, point.y, global_type]) for point in points],
         axis=0,
     )
-    cur_polyline_dir = get_polyline_dir(cur_polyline[:, 0:3])
+    cur_polyline_dir = get_polyline_dir(cur_polyline[:, 0:2])
     return np.concatenate(
-        (cur_polyline[:, 0:3], cur_polyline_dir, cur_polyline[:, 3:]), axis=-1
+        (cur_polyline[:, 0:2], cur_polyline_dir, cur_polyline[:, 2:]), axis=-1
     )
 
 
@@ -245,7 +245,7 @@ def _get_polyline_from_map_feature(
         return _get_polyline_features(map_feature.road_edge.polyline, global_type)
     elif map_feature.stop_sign.ByteSize() > 0:
         point = map_feature.stop_sign.position
-        return np.array([point.x, point.y, point.z, 0, 0, 0, global_type]).reshape(1, 7)
+        return np.array([point.x, point.y, 0, 0, global_type]).reshape(1, 5)
     elif map_feature.crosswalk.ByteSize() > 0:
         return _get_polyline_features(map_feature.crosswalk.polygon, global_type)
     elif map_feature.speed_bump.ByteSize() > 0:
@@ -317,7 +317,6 @@ def _decode_traffic_light_features_into_lists(
                 [
                     cur_signal.stop_point.x,
                     cur_signal.stop_point.y,
-                    cur_signal.stop_point.z,
                     cur_signal.state,
                 ]
             )
@@ -334,7 +333,7 @@ def _decode_traffic_light_features_into_lists(
 
 def decode_map_features(scenario: scenario_pb2.Scenario) -> dict[str, np.ndarray]:
     polyline_tensor = np.zeros(
-        (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH, 7), dtype=np.float32
+        (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH, 5), dtype=np.float32
     )
     polyline_type_tensor = np.zeros((MAX_NUM_POLYLINES,), dtype=np.int64)
     polyline_mask_tensor = np.zeros(
@@ -358,15 +357,15 @@ def decode_map_features(scenario: scenario_pb2.Scenario) -> dict[str, np.ndarray
 def decode_traffic_light_features(
     scenario: scenario_pb2.Scenario,
 ) -> dict[str, np.ndarray]:
-    tl_states = np.zeros((MAX_NUM_TL_TIMES, MAX_NUM_TL, 3), dtype=np.float32)
+    tl_states = np.zeros((MAX_NUM_TL_TIMES, MAX_NUM_TL, 2), dtype=np.float32)
     tl_states_categorical = np.zeros((MAX_NUM_TL_TIMES, MAX_NUM_TL), dtype=np.int64)
     tl_states_avails = np.zeros((MAX_NUM_TL_TIMES, MAX_NUM_TL), dtype=np.bool_)
 
     features_per_timestamp = _decode_traffic_light_features_into_lists(scenario)
 
     for i, traffic_lights in enumerate(features_per_timestamp):
-        tl_states[i, : len(traffic_lights), :3] = traffic_lights[:, :3]
-        tl_states_categorical[i, : len(traffic_lights)] = traffic_lights[:, 3]
+        tl_states[i, : len(traffic_lights), :2] = traffic_lights[:, :2]
+        tl_states_categorical[i, : len(traffic_lights)] = traffic_lights[:, 2]
         tl_states_avails[i, : len(traffic_lights)] = 1
 
     return {
@@ -393,10 +392,10 @@ def generate_features_from_proto(
         "actor_type": (np.int64, (MAX_AGENTS_IN_SCENARIO,)),
         "is_sdc": (np.bool_, (MAX_AGENTS_IN_SCENARIO,)),
         "tracks_to_predict": (np.bool_, (MAX_AGENTS_IN_SCENARIO,)),
-        "roadgraph_features": (np.float32, (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH, 7)),
+        "roadgraph_features": (np.float32, (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH, 5)),
         "roadgraph_features_mask": (np.bool_, (MAX_NUM_POLYLINES, MAX_POLYLINE_LENGTH)),
         "roadgraph_features_types": (np.int64, (MAX_NUM_POLYLINES,)),
-        "tl_states": (np.float32, (MAX_NUM_TL, MAX_NUM_TL_TIMES, 3)),
+        "tl_states": (np.float32, (MAX_NUM_TL, MAX_NUM_TL_TIMES, 2)),
         "tl_states_categorical": (np.int64, (MAX_NUM_TL, MAX_NUM_TL_TIMES)),
         "tl_avails": (np.bool_, (MAX_NUM_TL, MAX_NUM_TL_TIMES)),
     }
