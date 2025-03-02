@@ -9,11 +9,11 @@ from matplotlib.patches import Rectangle
 from matplotlib.transforms import Affine2D
 
 from data_utils.feature_description import (
-    _ROADGRAPH_IDX_TO_TYPE,
-    _ROADGRAPH_TYPE_TO_COLOR,
+    IDX_TO_ROADGRAPH_TYPE,
     MAX_AGENTS_TO_PREDICT,
     NUM_FUTURE_FRAMES,
     NUM_HISTORY_FRAMES,
+    ROADGRAPH_TYPE_TO_COLOR,
 )
 from utils.geometry import get_transformation_matrix, transform_points
 
@@ -218,10 +218,10 @@ def _plot_agent_trajectories(
 
 @dataclass
 class ProcessedMapFeatures:
-    points: np.ndarray  # [N, 2]
-    dirs: np.ndarray  # [N, 2]
-    types: np.ndarray  # [N,] type of each polyline
-    ids: np.ndarray  # [N,] id of each polyline
+    points: np.ndarray  # [P, N, 2]
+    dirs: np.ndarray  # [P, N, 2]
+    types: np.ndarray  # [P, N]
+    avails: np.ndarray  # [P, N]
 
 
 def _process_map_features(
@@ -236,29 +236,15 @@ def _process_map_features(
     Returns:
         ProcessedMapFeatures: The processed map features.
     """
-    map_features = single_sample["roadgraph_features"][anchor_index].cpu()
-    map_avails = single_sample["roadgraph_features_mask"][anchor_index].cpu()
-    map_types = single_sample["roadgraph_features_types"][anchor_index].cpu()
-    map_ids = single_sample["roadgraph_features_ids"][anchor_index].cpu()
-
-    n_polylines, n_points, _ = map_features.shape
-    map_features = map_features[..., :4].view(-1, 4)  # [M, P, 4] -> [N, 4]
-
-    map_avails = map_avails.view(-1, 1)[:, 0]  # [N,]
-    map_points = map_features[:, :2][map_avails]  # [N, 2]
-    map_dirs = map_features[:, 2:4][map_avails]  # [N, 2]
-
-    map_types = map_types.view(n_polylines, 1).expand(-1, n_points)
-    map_ids = map_ids.view(n_polylines, 1).expand(-1, n_points)
-
-    map_types = map_types.flatten()[map_avails].to(torch.int32)  # [N,]
-    map_ids = map_ids.flatten()[map_avails].to(torch.int32)  # [N,]
+    map_features = single_sample["roadgraph_features"][anchor_index].cpu().numpy()
+    map_avails = single_sample["roadgraph_features_mask"][anchor_index].cpu().numpy()
+    map_types = single_sample["roadgraph_features_types"][anchor_index].cpu().numpy()
 
     return ProcessedMapFeatures(
-        points=map_points,
-        dirs=map_dirs,
+        points=map_features[..., :2],
+        dirs=map_features[..., 2:4],
         types=map_types,
-        ids=map_ids,
+        avails=map_avails,
     )
 
 
@@ -273,19 +259,18 @@ def _plot_map_features(
     """
     processed_map_features = _process_map_features(single_sample, anchor_index)
 
-    unique_polyline_ids = torch.unique(processed_map_features.ids)
-    for polyline_id in unique_polyline_ids:
-        filtered_points = processed_map_features.points[
-            processed_map_features.ids == polyline_id
-        ]
-        filtered_dirs = processed_map_features.dirs[
-            processed_map_features.ids == polyline_id
-        ]
-        type_id = processed_map_features.types[
-            processed_map_features.ids == polyline_id
-        ][0]
-        color = _ROADGRAPH_TYPE_TO_COLOR[_ROADGRAPH_IDX_TO_TYPE[type_id.item()]]
-        if _ROADGRAPH_IDX_TO_TYPE[type_id.item()] == "StopSign":
+    for polyline_id in range(processed_map_features.points.shape[0]):
+        if not np.any(processed_map_features.avails[polyline_id]):
+            continue
+
+        avails = processed_map_features.avails[polyline_id]
+
+        filtered_points = processed_map_features.points[polyline_id][avails]
+        filtered_dirs = processed_map_features.dirs[polyline_id][avails]
+        type_id = processed_map_features.types[polyline_id]
+
+        color = ROADGRAPH_TYPE_TO_COLOR[IDX_TO_ROADGRAPH_TYPE[type_id.item()]]
+        if IDX_TO_ROADGRAPH_TYPE[type_id] == "TYPE_STOP_SIGN":
             plt.scatter(
                 filtered_points[:, 0],
                 filtered_points[:, 1],
@@ -302,7 +287,10 @@ def _plot_map_features(
                 linewidth=0.5,
                 zorder=0,
             )
-        if "LaneCenter" in _ROADGRAPH_IDX_TO_TYPE[type_id.item()]:
+        if IDX_TO_ROADGRAPH_TYPE[type_id.item()] in {
+            "TYPE_FREEWAY",
+            "TYPE_SURFACE_STREET",
+        }:
             plt.quiver(
                 filtered_points[:, 0],
                 filtered_points[:, 1],

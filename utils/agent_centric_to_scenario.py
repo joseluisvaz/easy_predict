@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from data_utils.feature_description import MAX_AGENTS_TO_PREDICT
 
 
-def pad_second_dim(tensor: torch.Tensor, target_size: int) -> torch.Tensor:
+def _pad_second_dim(tensor: torch.Tensor, target_size: int) -> torch.Tensor:
     """
     Pads the second dimension of the tensor to the target size with zeros.
     Args:
@@ -26,7 +26,7 @@ def pad_second_dim(tensor: torch.Tensor, target_size: int) -> torch.Tensor:
     return padded_tensor
 
 
-def batch_scenarios_by_feature(
+def _batch_scenarios_by_feature(
     scenarios: T.Dict[str, T.List[T.Dict[str, torch.Tensor]]],
 ) -> T.Dict[str, torch.Tensor]:
     """Groups agent features by scenario and batches them together.
@@ -42,7 +42,7 @@ def batch_scenarios_by_feature(
             stacked_feature = torch.stack(
                 [sample[feature_key] for sample in list_of_agent_samples], dim=0
             )[None, ...]
-            scenario[feature_key] = pad_second_dim(
+            scenario[feature_key] = _pad_second_dim(
                 stacked_feature, MAX_AGENTS_TO_PREDICT
             )
         scenario_batch.append(scenario)
@@ -83,4 +83,4 @@ def group_batch_by_scenario(
         }
         scenarios[scenario_id].append(agent_features)
 
-    return batch_scenarios_by_feature(scenarios)
+    return _batch_scenarios_by_feature(scenarios)

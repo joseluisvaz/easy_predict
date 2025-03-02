@@ -202,7 +202,7 @@ class Decoder(nn.Module):
 
 class PredictionModel(nn.Module):
     NUM_MCG_LAYERS = 4
-    MAP_INPUT_SIZE = 20  # x, y, direction and one hot encoded type
+    MAP_INPUT_SIZE = 25
 
     def __init__(
         self,
@@ -221,7 +221,11 @@ class PredictionModel(nn.Module):
             input_features, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
         )
         self.map_encoder = PointNetPolylineEncoder(
-            24, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
+            self.MAP_INPUT_SIZE,
+            64,
+            num_layers=5,
+            num_pre_layers=3,
+            out_channels=hidden_size,
         )
 
         self.tl_encoder = PointNetPolylineEncoder(

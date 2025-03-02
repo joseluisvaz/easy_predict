@@ -1,9 +1,9 @@
 # Train arguments
 data_module:
-  train_dataset: data/files/training
-  val_dataset: data/files/validation
+  train_dataset: data/pickled_1_3_0/validation
+  val_dataset: data/pickled_1_3_0/validation
   
-  batch_size: 64
+  batch_size: 48
   val_batch_size: 8 # validation works with scenes and we can only fit 8 scenes in the GPU
   num_workers: 32
 
@@ -36,6 +36,8 @@ model_config:
     delta_t: 0.2
   tl_encoder:
     input_size: 11
+  
+  # TODO put map input size here
     
 # Model arguments
 hidden_size: 128
