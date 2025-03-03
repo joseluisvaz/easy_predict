@@ -34,7 +34,7 @@ uv run -m scripts.train --gpu --fast-dev-run
 
 ## TODOs
 
-- [ ] Add a script to convert the waymo tfrecord files directly to pickle files.
+- [x] Add a script to convert the waymo tfrecord files directly to pickle files.
 - [x] Make a script to run the linter, formatter and tests with a single command.
 - [ ] Make running clearml optional and update documentation accordingly.
 - [x] Start unit testing the repository
