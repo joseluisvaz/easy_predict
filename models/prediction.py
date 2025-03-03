@@ -7,7 +7,7 @@ from omegaconf import DictConfig
 
 from models.attention import CrossAttentionBlock, SelfAttentionBlock
 from models.modules import DynamicsLayer
-from models.polyline_encoder import PointNetPolylineEncoder, build_mlps
+from models.pointnet_encoder import PointNetPolylineEncoder, build_mlps
 from models.rnn_cells import MultiAgentLSTMCell
 
 MAX_NUM_TRACKS_TO_PREDICT: T.Final = 8
@@ -84,58 +84,33 @@ def concatenate_tl_features(
     )
 
 
-class Encoder(nn.Module):
-    def __init__(self, input_size: int, hidden_size: int):
-        super(Encoder, self).__init__()
-        self.lstm_cell = MultiAgentLSTMCell(input_size, hidden_size)
-        self.hidden_size = hidden_size
-
-    def forward(
-        self, sequence: torch.Tensor, mask: torch.Tensor
-    ) -> T.Tuple[torch.Tensor, torch.Tensor]:
-        """Encode the sequence using an LSTM cell.
-        Args:
-            sequence: (n_batch, n_agents, n_timesteps, _)
-            mask: (n_batch, n_agents, n_timesteps)
-        Returns:
-            hidden: (n_batch, n_agents, n_timesteps, _)
-            context: (n_batch, n_agents, n_timesteps, _)
-        """
-
-        n_batch, n_agents, n_timesteps, _ = sequence.shape
-        hidden, context = self.lstm_cell.get_initial_hidden_state(
-            (n_batch, n_agents, self.hidden_size), sequence.device, requires_grad=True
-        )
-
-        for t in range(n_timesteps):
-            input_t = sequence[:, :, t, :]
-            mask_t = mask[:, :, t]
-            hidden, context = self.lstm_cell(input_t, (hidden, context), mask_t)
-
-        return hidden, context
-
-
 class Decoder(nn.Module):
-    def __init__(self, hidden_size: int, n_timesteps: int, config: DictConfig):
+    def __init__(self, n_timesteps: int, config: DictConfig):
         super(Decoder, self).__init__()
-        self.lstm_cell = MultiAgentLSTMCell(128, hidden_size)
-        self.linear = nn.Linear(hidden_size, config.decoder.output_size)
+
+        self.hidden_size = config.hidden_size
+        self.config = config.decoder
+        self.actor_input_size = config.actor_input_size
+
+        self.lstm_cell = MultiAgentLSTMCell(self.hidden_size, self.hidden_size)
+        self.linear = nn.Linear(self.hidden_size, self.config.output_size)
         self.n_timesteps = n_timesteps
-        self.hidden_size = hidden_size
         self.dynamics = DynamicsLayer(
-            config.dynamics_layer.delta_t,
-            config.dynamics_layer.max_acc,
-            config.dynamics_layer.max_yaw_rate,
+            self.config.dynamics_layer.delta_t,
+            self.config.dynamics_layer.max_acc,
+            self.config.dynamics_layer.max_yaw_rate,
         )
 
         # Attention mechanism to attend to the context vectors
         self.context_attention = CrossAttentionBlock(
-            embed_dim=hidden_size, num_heads=8, dropout_p=0.0
+            embed_dim=self.hidden_size,
+            num_heads=self.config.cross_attention.n_heads,
+            dropout_p=self.config.cross_attention.dropout_p,
         )
 
         self.state_encoder = build_mlps(
-            config.decoder.input_size,
-            [128, 64, 128],
+            self.actor_input_size,
+            [self.hidden_size, self.hidden_size // 2, self.hidden_size],
             ret_before_act=True,
             without_norm=True,
         )
@@ -200,44 +175,78 @@ class Decoder(nn.Module):
         return outputs
 
 
-class PredictionModel(nn.Module):
-    NUM_MCG_LAYERS = 4
-    MAP_INPUT_SIZE = 25
-
-    def __init__(
-        self,
-        input_features: int,
-        hidden_size: int,
-        n_timesteps: int,
-        model_config: DictConfig,
-    ):
-        super(PredictionModel, self).__init__()
-        self.hidden_size = hidden_size
-        # self.encoder = Encoder(input_features, hidden_size)
-        self.decoder = Decoder(hidden_size, n_timesteps, model_config)
-
+class MultiModalEncoder(nn.Module):
+    def __init__(self, config: DictConfig):
+        super(MultiModalEncoder, self).__init__()
+        self.hidden_size = config.hidden_size
+        self.config = config.encoder
+        self.actor_input_size = config.actor_input_size
         # Map encoder, same parameters as in the MTR repository
         self.actor_encoder = PointNetPolylineEncoder(
-            input_features, 64, num_layers=5, num_pre_layers=3, out_channels=hidden_size
-        )
-        self.map_encoder = PointNetPolylineEncoder(
-            self.MAP_INPUT_SIZE,
-            64,
+            self.actor_input_size,
+            self.hidden_size // 2,
             num_layers=5,
             num_pre_layers=3,
-            out_channels=hidden_size,
+            out_channels=self.hidden_size,
+        )
+        self.map_encoder = PointNetPolylineEncoder(
+            self.config.map_input_size,
+            self.hidden_size // 2,
+            num_layers=self.config.point_net.num_layers,
+            num_pre_layers=self.config.point_net.num_pre_layers,
+            out_channels=self.hidden_size,
         )
 
         self.tl_encoder = PointNetPolylineEncoder(
-            model_config.tl_encoder.input_size,
-            64,
-            num_layers=5,
-            num_pre_layers=3,
-            out_channels=hidden_size,
+            self.config.tl_input_size,
+            self.hidden_size // 2,
+            num_layers=self.config.point_net.num_layers,
+            num_pre_layers=self.config.point_net.num_pre_layers,
+            out_channels=self.hidden_size,
         )
 
+    def forward(
+        self,
+        history_features: torch.Tensor,
+        history_availabilities: torch.Tensor,
+        roadgraph_features: torch.Tensor,
+        roadgraph_availabilities: torch.Tensor,
+        tl_features: torch.Tensor,
+        tl_availabilities: torch.Tensor,
+    ) -> T.Tuple[torch.Tensor, torch.Tensor]:
+        hidden_actor = self.actor_encoder(history_features, history_availabilities)
+        hidden_map = self.map_encoder(roadgraph_features, roadgraph_availabilities)
+        hidden_tl = self.tl_encoder(tl_features, tl_availabilities)
+
+        # Check if there is any availability per entity, these are the valid entitites
+        # that should be attended to even if they are not present for the entire sequence
+        # length.
+        actor_avails = torch.any(history_availabilities, dim=2)
+        polyline_avails = torch.any(roadgraph_availabilities, dim=2)
+        tl_persistent_avails = torch.any(tl_availabilities, dim=2)
+        global_features = torch.cat([hidden_actor, hidden_map, hidden_tl], dim=1)
+        global_avails = torch.cat(
+            [actor_avails, polyline_avails, tl_persistent_avails], dim=1
+        )
+
+        return global_features, global_avails
+
+
+class PredictionModel(nn.Module):
+    def __init__(
+        self,
+        n_timesteps: int,
+        config: DictConfig,
+    ):
+        super(PredictionModel, self).__init__()
+        self.hidden_size = config.hidden_size
+        self.decoder = Decoder(n_timesteps, config)
+        self.encoder = MultiModalEncoder(config)
+
         self.global_attention = SelfAttentionBlock(
-            embed_dim=hidden_size, num_heads=8, dropout_p=0.0
+            embed_dim=self.hidden_size,
+            num_heads=config.self_attention.n_heads,
+            dropout_p=config.self_attention.dropout_p,
         )
 
     def forward(
@@ -251,29 +260,23 @@ class PredictionModel(nn.Module):
         tl_states: torch.Tensor,
         tl_states_categorical: torch.Tensor,
         tl_avails: torch.Tensor,
-        tracks_to_predict: torch.Tensor,
         agent_to_predict: torch.Tensor,
     ) -> torch.Tensor:
-        # map_feats.shape is (batch, polyline, points, features)
-        map_feats = roadgraph_features
-        map_types = roadgraph_types
-        map_avails = roadgraph_features_mask
+        history_features_ohe = concatenate_historical_features(
+            history_states, actor_types
+        )
+        roadgraph_features_ohe = concatenate_map_features(
+            roadgraph_features, roadgraph_types
+        )
+        tl_features_ohe = concatenate_tl_features(tl_states, tl_states_categorical)
 
-        history_features = concatenate_historical_features(history_states, actor_types)
-        map_feats = concatenate_map_features(map_feats, map_types)
-        tl_feats = concatenate_tl_features(tl_states, tl_states_categorical)
-
-        actor_avails = torch.any(history_availabilities, dim=2)
-        polyline_avails = torch.any(map_avails, dim=2)
-
-        hidden_actor = self.actor_encoder(history_features, history_availabilities)
-        hidden_map = self.map_encoder(map_feats, map_avails)  # [N_BATCH, N_POLYLINES]
-
-        tl_persistent_avails = torch.any(tl_avails, dim=2)
-        hidden_tl = self.tl_encoder(tl_feats, tl_avails)  # [N_BATCH, N_TRAFFIC_LIGHTS]
-        global_features = torch.cat([hidden_actor, hidden_map, hidden_tl], dim=1)
-        global_avails = torch.cat(
-            [actor_avails, polyline_avails, tl_persistent_avails], dim=1
+        global_features, global_avails = self.encoder(
+            history_features_ohe,
+            history_availabilities,
+            roadgraph_features_ohe,
+            roadgraph_features_mask,
+            tl_features_ohe,
+            tl_avails,
         )
 
         # Perform self attention on all the features before sending it to the cross attention mask
@@ -281,12 +284,16 @@ class PredictionModel(nn.Module):
 
         # Get the agent of interest to predict and add a new agent dimension of size 1 for compatibility
         # with the decoder
-        batch_indices = torch.arange(
-            history_features.shape[0], device=history_features.device
-        )
-        current_features = history_features[batch_indices, agent_to_predict, -1][
+        batch_size = history_features_ohe.shape[0]
+        batch_indices = torch.arange(batch_size, device=history_features_ohe.device)
+
+        # Get the last history state of the agent of interest and index for the
+        # agent to predict for each sample in the batch.
+        current_features = history_features_ohe[batch_indices, agent_to_predict, -1][
             :, None
         ]
+
+        # Get the last history availability of the agent of interest
         current_availabilities = history_availabilities[
             batch_indices, agent_to_predict, -1
         ][:, None]

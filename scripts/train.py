@@ -9,9 +9,9 @@ from lightning.pytorch.tuner import Tuner
 from omegaconf import OmegaConf
 from pytorch_lightning.profilers import SimpleProfiler
 
-from data_utils.data_module import AgentCentricDataModule
-from models.pl_module import PredictionLightningModule
-from utils.metrics_callback import ModelInspectionCallback
+from training_utils.data_module import AgentCentricDataModule
+from training_utils.metrics_callback import ModelInspectionCallback
+from training_utils.pl_module import PredictionLightningModule
 
 torch.autograd.set_detect_anomaly(True)
 torch.set_float32_matmul_precision("medium")

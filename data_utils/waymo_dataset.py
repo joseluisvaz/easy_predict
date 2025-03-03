@@ -5,6 +5,7 @@ import typing as T
 
 import numpy as np
 from torch.utils.data import Dataset
+from torch.utils.data._utils.collate import default_collate, default_convert
 
 from data_utils.feature_description import NUM_HISTORY_FRAMES
 from utils.geometry import (
@@ -13,6 +14,39 @@ from utils.geometry import (
     get_yaw_from_se2,
     transform_points,
 )
+
+
+def collate_waymo_concatenate(
+    payloads: T.List[T.Dict[str, np.ndarray]],
+) -> T.Dict[str, np.ndarray]:
+    collated_batch = {}
+    for key in payloads[0]:
+        collated_batch[key] = np.concatenate([payload[key] for payload in payloads])
+    return default_convert(collated_batch)
+
+
+def collate_waymo_stack(
+    payloads: T.List[T.Dict[str, np.ndarray]],
+) -> T.Dict[str, np.ndarray]:
+    return default_convert(default_collate(payloads))
+
+
+def collate_waymo_scenario(
+    payloads: T.List[T.List[T.Dict[str, np.ndarray]]],
+) -> T.Dict[str, np.ndarray]:
+    # First collation will do stacking of the tensors
+    collated_subbatches = []
+    for subbatch in payloads:
+        collated_subbatches.append(default_collate(subbatch))
+
+    # Second collation will do concatenation of the tensors
+    collated_batch = {}
+    for key in collated_subbatches[0]:
+        collated_batch[key] = np.concatenate(
+            [subbatch[key] for subbatch in collated_subbatches]
+        )
+
+    return default_convert(collated_batch)
 
 
 def _generate_agent_features(
