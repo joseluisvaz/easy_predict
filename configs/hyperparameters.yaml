@@ -3,11 +3,11 @@ data_module:
   train_dataset: data/pickled_1_3_0/validation
   val_dataset: data/pickled_1_3_0/validation
   
-  batch_size: 48
+  batch_size: 64
   val_batch_size: 8 # validation works with scenes and we can only fit 8 scenes in the GPU
   num_workers: 32
 
-max_epochs: 500
+max_epochs: 50
 accumulate_grad_batches: 1
 grad_norm_clip: 5.0
 weight_decay: 0.01
